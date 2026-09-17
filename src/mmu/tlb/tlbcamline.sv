@@ -31,10 +31,12 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 module tlbcamline import cvw::*;  #(parameter cvw_t P,
-                                    parameter KEY_BITS = 20, SEGMENT_BITS = 10) (
+                                    parameter KEY_BITS = 20, SEGMENT_BITS = 10, VMID_BITS = 14) (
   input  logic                  clk, reset,
   input  logic [P.VPN_BITS-1:0]  VPN, // The requested page number to compare against the key
   input  logic [P.ASID_BITS-1:0] SATP_ASID,
+  input  logic                  VirtTag,   // access is virtualized (V=1, or HLV/HSV): entry belongs to the guest address space
+  input  logic [VMID_BITS-1:0]  VMID,      // hgatp.VMID of a virtualized access
   input  logic                  SV39Mode,
   input  logic                  SV48Mode,
   input  logic                  WriteEnable,  // Write a new entry to this line
@@ -61,8 +63,23 @@ module tlbcamline import cvw::*;  #(parameter cvw_t P,
   logic [P.ASID_BITS-1:0] Key_ASID;
   logic [SEGMENT_BITS-1:0] Key0, Key1, Query0, Query1;
   logic MatchASID, MatchNAPOT, Match0, Match1, Match2, Match3, Match4;
+  logic MatchVirt;
 
-  assign Key_ASID = Key[KEY_BITS-1:KEY_BITS-P.ASID_BITS];
+  // With the hypervisor extension the key is {VirtTag, VMID, ASID, VPN}: entries made
+  // for the guest (V=1 or HLV/HSV) only match virtualized accesses of the same VMID,
+  // and HS-level entries only match non-virtualized accesses. The G (global) bit only
+  // waives the ASID comparison, never the V/VMID comparison.
+  if (P.H_SUPPORTED) begin: hkey
+    logic                 Key_Virt;
+    logic [VMID_BITS-1:0] Key_VMID;
+    assign Key_Virt = Key[KEY_BITS-1];
+    assign Key_VMID = Key[KEY_BITS-2:KEY_BITS-1-VMID_BITS];
+    assign Key_ASID = Key[KEY_BITS-2-VMID_BITS:KEY_BITS-1-VMID_BITS-P.ASID_BITS];
+    assign MatchVirt = (Key_Virt == VirtTag) & (~VirtTag | (Key_VMID == VMID));
+  end else begin: nohkey
+    assign Key_ASID = Key[KEY_BITS-1:KEY_BITS-P.ASID_BITS];
+    assign MatchVirt = 1'b1;
+  end
   assign MatchASID = (SATP_ASID == Key_ASID) | PTE_G;
 
   // Calculate a match against a segment of the key based on the input vpn and the page type.
@@ -102,7 +119,7 @@ module tlbcamline import cvw::*;  #(parameter cvw_t P,
     assign Match4 = (Query4 == Key4) | SV39Mode | SV48Mode; // always match in SV39/SV48 mode
   end else assign Match4 = 1'b1;
 
-  assign Match = Match0 & Match1 & Match2 & Match3 & Match4 & MatchASID & Valid;
+  assign Match = Match0 & Match1 & Match2 & Match3 & Match4 & MatchASID & MatchVirt & Valid;
 
   // On a write, update the type of the page referred to by this line.
   flopenr #(3) pagetypeflop(clk, reset, WriteEnable, PageTypeWriteVal, PageType);
@@ -111,5 +128,9 @@ module tlbcamline import cvw::*;  #(parameter cvw_t P,
   // On a write, set the valid bit high and update the stored key.
   // On a flush, zero the valid bit and leave the key unchanged.
   flopenr #(1) validbitflop(clk, reset, WriteEnable | TLBFlush, ~TLBFlush, Valid);
-  flopenr #(KEY_BITS) keyflop(clk, reset, WriteEnable, {SATP_ASID, VPN}, Key);
+  if (P.H_SUPPORTED) begin: hkeyflop
+    flopenr #(KEY_BITS) keyflop(clk, reset, WriteEnable, {VirtTag, VMID, SATP_ASID, VPN}, Key);
+  end else begin: nohkeyflop
+    flopenr #(KEY_BITS) keyflop(clk, reset, WriteEnable, {SATP_ASID, VPN}, Key);
+  end
 endmodule

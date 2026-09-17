@@ -52,10 +52,14 @@
 
 // The TLB will have 2**ENTRY_BITS total entries
 module tlb import cvw::*;  #(parameter cvw_t P,
-                             parameter TLB_ENTRIES = 8, ITLB = 0) (
+                             parameter TLB_ENTRIES = 8, ITLB = 0,
+                             parameter VMID_BITS = (P.XLEN == 32) ? 7 : 14) (
   input logic                      clk, reset,
-  input  logic [P.SVMODE_BITS-1:0] SATP_MODE,        // Current address translation mode
-  input  logic [P.ASID_BITS-1:0]   SATP_ASID,
+  input  logic [P.SVMODE_BITS-1:0] SATP_MODE,        // Current stage-1 address translation mode (satp, or vsatp when virtualized)
+  input  logic [P.ASID_BITS-1:0]   SATP_ASID,        // Current stage-1 ASID
+  input  logic                     VirtTag,          // Access is virtualized: entries are tagged with V and VMID
+  input  logic [VMID_BITS-1:0]     VMID,             // hgatp.VMID for virtualized accesses
+  input  logic                     GStageActive,     // Virtualized access with hgatp not Bare: two-stage (or G-stage-only) translation
   input  logic                     STATUS_MXR, STATUS_SUM, STATUS_MPRV,
   input  logic [1:0]               STATUS_MPP,
   input  logic                     ENVCFG_PBMTE,     // Page-based memory types enabled
@@ -113,15 +117,17 @@ module tlb import cvw::*;  #(parameter cvw_t P,
   assign VPN = VAdr[P.VPN_BITS+11:12];
   assign NAPOT4 = (PPN[3:0] == 4'b1000); // 64 KiB contiguous region with pte.napot_bits = 4
 
-  tlbcontrol #(P, ITLB) tlbcontrol(.SATP_MODE, .VAdr, .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .ENVCFG_PBMTE, .ENVCFG_ADUE,
+  tlbcontrol #(P, ITLB) tlbcontrol(.SATP_MODE, .GStageActive, .VAdr, .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .ENVCFG_PBMTE, .ENVCFG_ADUE,
     .EffectivePrivilegeModeW, .ReadAccess, .WriteAccess, .CMOpM, .DisableTranslation,
     .PTEAccessBits, .CAMHit, .Misaligned, .NAPOT4,
     .TLBMiss, .TLBHit, .TLBPageFault,
     .UpdateDA, .SV39Mode, .SV48Mode, .Translate, .PTE_N, .PBMemoryType);
 
   tlblru #(TLB_ENTRIES) lru(.clk, .reset, .TLBWrite, .Matches, .TLBHit, .WriteEnables);
-  tlbcam #(P, TLB_ENTRIES, P.VPN_BITS + P.ASID_BITS, P.VPN_SEGMENT_BITS)
-    tlbcam(.clk, .reset, .VPN, .PageTypeWriteVal, .SV39Mode, .SV48Mode, .TLBFlush, .WriteEnables, .PTE_Gs, .PTE_NAPOTs,
+  // With the hypervisor extension the CAM key also holds the V tag and VMID
+  localparam KEY_BITS = P.VPN_BITS + P.ASID_BITS + (P.H_SUPPORTED ? 1 + VMID_BITS : 0);
+  tlbcam #(P, TLB_ENTRIES, KEY_BITS, P.VPN_SEGMENT_BITS, VMID_BITS)
+    tlbcam(.clk, .reset, .VPN, .VirtTag, .VMID, .PageTypeWriteVal, .SV39Mode, .SV48Mode, .TLBFlush, .WriteEnables, .PTE_Gs, .PTE_NAPOTs,
            .SATP_ASID, .Matches, .HitPageType, .CAMHit);
   tlbram #(P, TLB_ENTRIES) tlbram(.clk, .reset, .PTE, .Matches, .WriteEnables, .PPN, .PTEAccessBits, .PTE_Gs, .PTE_NAPOTs);
 

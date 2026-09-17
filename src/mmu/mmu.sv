@@ -91,6 +91,9 @@ module mmu import cvw::*;  #(parameter cvw_t P,
   logic [P.XLEN-1:0]           EffSATP;                  // Stage-1 address translation register: satp, or vsatp when virtualized
   logic                        EffMXR, EffSUM;           // Status bits applied to stage-1 translation
   logic                        EffPBMTE, EffADUE;        // envcfg controls applied to stage-1 translation
+  logic                        GStageActive;             // Virtualized access with hgatp not Bare
+  localparam                   VMID_BITS = (P.XLEN == 32) ? 7 : 14;
+  logic [VMID_BITS-1:0]        VMID;                     // hgatp.VMID
 
   // Effective virtualization mode and stage-1 translation controls.
   // Instruction fetches are virtualized exactly when V=1. Data accesses are virtualized
@@ -104,14 +107,22 @@ module mmu import cvw::*;  #(parameter cvw_t P,
     end else begin: effvirt_dmmu
       assign EffVirtModeW = HLVHSVLegalM | (STATUS_MPRV ? MSTATUS_MPV : VirtModeW);
     end
+    logic VSStageBare;
     assign EffSATP  = EffVirtModeW ? VSATP_REGW : SATP_REGW;
-    assign EffMXR   = EffVirtModeW ? (VSSTATUS_MXR | STATUS_MXR) : STATUS_MXR;
+    assign GStageActive = EffVirtModeW & (HGATP_REGW[P.XLEN-1:P.XLEN-P.SVMODE_BITS] != P.NO_TRANSLATE[P.SVMODE_BITS-1:0]);
+    assign VSStageBare  = GStageActive & (VSATP_REGW[P.XLEN-1:P.XLEN-P.SVMODE_BITS] == P.NO_TRANSLATE[P.SVMODE_BITS-1:0]);
+    assign VMID = HGATP_REGW[P.PPN_BITS+VMID_BITS-1:P.PPN_BITS];
+    // vsstatus.MXR only applies to VS-stage translation; with VS-stage Bare the entry
+    // holds G-stage permissions, which only the HS-level MXR may relax.
+    assign EffMXR   = EffVirtModeW & ~VSStageBare ? (VSSTATUS_MXR | STATUS_MXR) : STATUS_MXR;
     assign EffSUM   = EffVirtModeW ? VSSTATUS_SUM : STATUS_SUM;
-    assign EffPBMTE = EffVirtModeW ? VSENVCFG_PBMTE : ENVCFG_PBMTE;
+    assign EffPBMTE = EffVirtModeW & ~VSStageBare ? VSENVCFG_PBMTE : ENVCFG_PBMTE;
     assign EffADUE  = EffVirtModeW ? VSENVCFG_ADUE : ENVCFG_ADUE;
   end else begin: effvirt_noh
     assign EffVirtModeW = 1'b0;
     assign EffSATP  = SATP_REGW;
+    assign GStageActive = 1'b0;
+    assign VMID = '0;
     assign EffMXR   = STATUS_MXR;
     assign EffSUM   = STATUS_SUM;
     assign EffPBMTE = ENVCFG_PBMTE;
@@ -136,10 +147,11 @@ module mmu import cvw::*;  #(parameter cvw_t P,
     logic ReadAccess, WriteAccess;
     assign ReadAccess = ExecuteAccessF | ReadAccessM; // execute also acts as a TLB read.  Execute and Read are never active for the same MMU, so safe to mix pipestages
     assign WriteAccess = WriteAccessM;
-    tlb #(.P(P), .TLB_ENTRIES(TLB_ENTRIES), .ITLB(IMMU)) tlb(
+    tlb #(.P(P), .TLB_ENTRIES(TLB_ENTRIES), .ITLB(IMMU), .VMID_BITS(VMID_BITS)) tlb(
           .clk, .reset,
           .SATP_MODE(EffSATP[P.XLEN-1:P.XLEN-P.SVMODE_BITS]),
           .SATP_ASID(EffSATP[P.ASID_BASE+P.ASID_BITS-1:P.ASID_BASE]),
+          .VirtTag(EffVirtModeW), .VMID, .GStageActive,
           .VAdr(VAdr[P.XLEN-1:0]), .STATUS_MXR(EffMXR), .STATUS_SUM(EffSUM), .STATUS_MPRV, .STATUS_MPP,
           .ENVCFG_PBMTE(EffPBMTE), .ENVCFG_ADUE(EffADUE),
           .EffectivePrivilegeModeW, .ReadAccess, .WriteAccess, .CMOpM,

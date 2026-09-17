@@ -28,7 +28,8 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 module tlbcontrol import cvw::*;  #(parameter cvw_t P, ITLB = 0) (
-  input  logic [P.SVMODE_BITS-1:0] SATP_MODE,
+  input  logic [P.SVMODE_BITS-1:0] SATP_MODE,          // stage-1 translation mode (satp, or vsatp when virtualized)
+  input  logic                     GStageActive,       // virtualized access with hgatp not Bare
   input  logic [P.XLEN-1:0]        VAdr,
   input  logic                     STATUS_MXR, STATUS_SUM, STATUS_MPRV,
   input  logic [1:0]               STATUS_MPP,
@@ -63,15 +64,28 @@ module tlbcontrol import cvw::*;  #(parameter cvw_t P, ITLB = 0) (
   logic                           ReservedRW;
   logic                           InvalidAccess;
   logic                           PreUpdateDA, PrePageFault;
+  logic                           VSStageBare;        // G-stage-only translation: no stage-1 permission checks apply
+  logic                           GOnlyUpperBitsNonzero; // G-stage-only address has nonzero bits above the guest physical address width
 
-  // Grab the sv mode from SATP and determine whether translation should occur
-  assign Translate = (SATP_MODE != P.NO_TRANSLATE[P.SVMODE_BITS-1:0]) & (EffectivePrivilegeModeW != P.M_MODE) & ~DisableTranslation;
+  // Grab the sv mode from SATP and determine whether translation should occur.
+  // A virtualized access translates whenever either stage is not Bare.
+  assign Translate = ((SATP_MODE != P.NO_TRANSLATE[P.SVMODE_BITS-1:0]) | GStageActive) & (EffectivePrivilegeModeW != P.M_MODE) & ~DisableTranslation;
+  assign VSStageBare = GStageActive & (SATP_MODE == P.NO_TRANSLATE[P.SVMODE_BITS-1:0]);
 
   // Determine whether TLB is being used
   assign TLBAccess = ReadAccess | WriteAccess | (|CMOpM);
 
   // Check that upper bits are legal (all 0s or all 1s)
   vm64check #(P) vm64check(.SATP_MODE, .VAdr, .SV39Mode, .SV48Mode, .UpperBitsUnequal);
+
+  // With VS-stage Bare, the address is a guest physical address whose bits above the
+  // widest supported guest physical address must be zero. Such an address must not hit a
+  // (truncated) TLB entry; it is forced to miss so the walker raises a guest-page fault.
+  if (P.H_SUPPORTED & P.XLEN == 64) begin: gonlyupper
+    assign GOnlyUpperBitsNonzero = VSStageBare & (|VAdr[P.XLEN-1:P.VPN_BITS+12]);
+  end else begin: nogonlyupper
+    assign GOnlyUpperBitsNonzero = 1'b0;
+  end
 
   // unswizzle useful PTE bits
   assign PTE_N = PTEAccessBits[11];
@@ -92,8 +106,9 @@ module tlbcontrol import cvw::*;  #(parameter cvw_t P, ITLB = 0) (
   // Check whether the access is allowed, page faulting if not.
   if (ITLB == 1) begin:itlb // Instruction TLB fault checking
     // User mode may only execute user mode pages, and supervisor mode may
-    // only execute non-user mode pages.
-    assign ImproperPrivilege = ((EffectivePrivilegeModeW == P.U_MODE) & ~PTE_U) | ((EffectivePrivilegeModeW == P.S_MODE) & PTE_U);
+    // only execute non-user mode pages. With VS-stage Bare there is no stage-1 PTE;
+    // the G-stage user-level check was already made by the walker.
+    assign ImproperPrivilege = (((EffectivePrivilegeModeW == P.U_MODE) & ~PTE_U) | ((EffectivePrivilegeModeW == P.S_MODE) & PTE_U)) & ~VSStageBare;
     assign PreUpdateDA = ~PTE_A;
     assign InvalidAccess = ~PTE_X | ReservedRW;
  end else begin:dtlb // Data TLB fault checking
@@ -101,9 +116,10 @@ module tlbcontrol import cvw::*;  #(parameter cvw_t P, ITLB = 0) (
     logic InvalidCBOM, InvalidCBOZ;
 
     // User mode may only load/store from user mode pages, and supervisor mode
-    // may only access user mode pages when STATUS_SUM is low.
-    assign ImproperPrivilege = ((EffectivePrivilegeModeW == P.U_MODE) & ~PTE_U) |
-      ((EffectivePrivilegeModeW == P.S_MODE) & PTE_U & ~STATUS_SUM);
+    // may only access user mode pages when STATUS_SUM is low. With VS-stage Bare
+    // there is no stage-1 PTE; the G-stage user-level check was made by the walker.
+    assign ImproperPrivilege = (((EffectivePrivilegeModeW == P.U_MODE) & ~PTE_U) |
+      ((EffectivePrivilegeModeW == P.S_MODE) & PTE_U & ~STATUS_SUM)) & ~VSStageBare;
     // Check for read error. Reads are invalid when the page is not readable
     // (and executable pages are not readable) or when the page is neither
     // readable nor executable (and executable pages are readable).
@@ -116,13 +132,17 @@ module tlbcontrol import cvw::*;  #(parameter cvw_t P, ITLB = 0) (
     assign PreUpdateDA = ~PTE_A | (WriteAccess | CMOpM[3]) & ~PTE_D;
   end
 
-  // Determine whether to update DA bits.  With SVADU, it is done in hardware
-  assign UpdateDA = P.SVADU_SUPPORTED & PreUpdateDA & Translate & TLBHit & ~TLBPageFault & ENVCFG_ADUE;
+  // Determine whether to update DA bits.  With SVADU, it is done in hardware.
+  // A two-stage entry merges the A/D bits of both stages, so the TLB cannot tell which
+  // stage needs an update or should fault: it always hands such accesses back to the
+  // walker, which updates or faults on the right stage (page fault vs. guest-page fault).
+  assign UpdateDA = (P.SVADU_SUPPORTED & ENVCFG_ADUE | GStageActive) & PreUpdateDA & Translate & TLBHit & ~TLBPageFault;
 
   // Determine whether page fault occurs
-  assign PrePageFault = UpperBitsUnequal | Misaligned | ~PTE_V | ImproperPrivilege | (P.XLEN == 64 & (BadPBMT | BadNAPOT | BadReserved)) | (PreUpdateDA & (~P.SVADU_SUPPORTED | ~ENVCFG_ADUE));
+  assign PrePageFault = UpperBitsUnequal | Misaligned | ~PTE_V | ImproperPrivilege | (P.XLEN == 64 & (BadPBMT | BadNAPOT | BadReserved)) |
+                        (PreUpdateDA & (~P.SVADU_SUPPORTED | ~ENVCFG_ADUE) & ~GStageActive);
   assign TLBPageFault = Translate & TLBHit & (PrePageFault | InvalidAccess);
 
-  assign TLBHit = CAMHit & TLBAccess;
-  assign TLBMiss = ~CAMHit & TLBAccess & Translate ;
+  assign TLBHit = CAMHit & TLBAccess & ~GOnlyUpperBitsNonzero;
+  assign TLBMiss = (~CAMHit | GOnlyUpperBitsNonzero) & TLBAccess & Translate;
 endmodule

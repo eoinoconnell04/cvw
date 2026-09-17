@@ -31,9 +31,11 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 module tlbcam  import cvw::*;  #(parameter cvw_t P,
-                                 parameter TLB_ENTRIES = 8, KEY_BITS = 20, SEGMENT_BITS = 10) (
+                                 parameter TLB_ENTRIES = 8, KEY_BITS = 20, SEGMENT_BITS = 10, VMID_BITS = 14) (
   input  logic                    clk, reset,
   input  logic [P.VPN_BITS-1:0]   VPN,
+  input  logic                    VirtTag,
+  input  logic [VMID_BITS-1:0]    VMID,
   input  logic [2:0]              PageTypeWriteVal,
   input  logic                    SV39Mode,
   input  logic                    SV48Mode,
@@ -55,8 +57,8 @@ module tlbcam  import cvw::*;  #(parameter cvw_t P,
   // of page type. However, matches are determined based on a subset of the
   // page number segments.
 
-  tlbcamline #(P, KEY_BITS, SEGMENT_BITS) camlines[TLB_ENTRIES-1:0](
-    .clk, .reset, .VPN, .SATP_ASID, .SV39Mode, .SV48Mode, .PTE_G(PTE_Gs), .PTE_NAPOT(PTE_NAPOTs), .PageTypeWriteVal, .TLBFlush,
+  tlbcamline #(P, KEY_BITS, SEGMENT_BITS, VMID_BITS) camlines[TLB_ENTRIES-1:0](
+    .clk, .reset, .VPN, .SATP_ASID, .VirtTag, .VMID, .SV39Mode, .SV48Mode, .PTE_G(PTE_Gs), .PTE_NAPOT(PTE_NAPOTs), .PageTypeWriteVal, .TLBFlush,
     .WriteEnable(WriteEnables), .PageTypeRead, .Match(Matches));
   assign CAMHit = |Matches & ~TLBFlush;
   or_rows #(TLB_ENTRIES,3) PageTypeOr(PageTypeRead, HitPageType);
