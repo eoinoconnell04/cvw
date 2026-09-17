@@ -47,10 +47,6 @@ module trickbox_apb import cvw::*;  #(parameter XLEN = 64, NUM_HARTS = 1) (
   output logic [XLEN-1:0]     TOHOST_OUT
 );
 
-  // register map
-  localparam CLINT_MSIP     = 16'h0000;
-  localparam CLINT_MTIMECMP = 16'h4000;
-  localparam CLINT_MTIME    = 16'hBFF8;
 
   logic [63:0]                MTIMECMP[NUM_HARTS-1:0];
   logic [7:0]                 TRICKEN;
