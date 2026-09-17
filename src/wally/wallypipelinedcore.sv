@@ -163,6 +163,8 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
   logic                          IClassWrongM;
   logic [3:0]                    IClassM;
   logic                          InstrAccessFaultF, HPTWInstrAccessFaultF, HPTWInstrPageFaultF;
+  logic                          LoadGuestPageFaultM, StoreAmoGuestPageFaultM, HPTWInstrGuestPageFaultF;
+  logic [P.XLEN-1:0]             HPTWGPAM;
   logic [2:0]                    LSUHSIZE;
   logic [2:0]                    LSUHBURST;
   logic [1:0]                    LSUHTRANS;
@@ -268,6 +270,10 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
     .LoadAccessFaultM,            // connects to privilege
     .HPTWInstrAccessFaultF,       // connects to privilege
     .HPTWInstrPageFaultF,         // connects to privilege
+    .LoadGuestPageFaultM,         // connects to privilege
+    .StoreAmoGuestPageFaultM,     // connects to privilege
+    .HPTWInstrGuestPageFaultF,    // connects to privilege
+    .HPTWGPAM,                    // connects to privilege
     .StoreAmoMisalignedFaultM,    // connects to privilege
     .StoreAmoAccessFaultM,        // connects to privilege
     .PCSpillF, .ITLBMissOrUpdateAF, .PTE, .PageType, .ITLBWriteF, .SelHPTW,
@@ -321,6 +327,7 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
       .MTimerInt, .MExtInt, .SExtInt, .MSwInt,
       .MTIME_CLINT, .HGEIPIn, .IEUAdrxTvalM, .SetFflagsM,
       .InstrAccessFaultF, .HPTWInstrAccessFaultF, .HPTWInstrPageFaultF, .LoadAccessFaultM, .StoreAmoAccessFaultM, .SelHPTW,
+      .LoadGuestPageFaultM, .StoreAmoGuestPageFaultM, .HPTWInstrGuestPageFaultF, .HPTWGPAM,
       .PrivilegeModeW, .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .VirtModeW, .MSTATUS_MPV,
       .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .VSSTATUS_MXR, .VSSTATUS_SUM, .STATUS_MPP, .STATUS_FS,
       .HSTATUS_SPVP, .HLVHSVLegalM,

@@ -43,6 +43,8 @@ module trap import cvw::*;  #(parameter cvw_t P) (
   input  logic                 STATUS_MIE, STATUS_SIE, VSSTATUS_SIE,            // machine/HS/VS interrupt enables
   input  logic                 InstrValidM,                                     // current instruction is valid, not flushed
   input  logic                 CommittedM, CommittedF,                          // LSU/IFU has committed to a bus operation that can't be interrupted
+  input  logic                 LoadGuestPageFaultM, StoreAmoGuestPageFaultM,    // G-stage faults on data accesses (hypervisor)
+  input  logic                 HPTWInstrGuestPageFaultM,                        // G-stage fault on instruction fetch (hypervisor)
   output logic                 TrapM,                                           // Trap is occurring
   output logic                 InterruptM,                                      // Interrupt is occurring
   output logic                 ExceptionM,                                      // exception is occurring
@@ -141,6 +143,7 @@ module trap import cvw::*;  #(parameter cvw_t P) (
     assign ExceptionM = InstrMisalignedFaultM | BothInstrAccessFaultM | IllegalInstrFaultM |
                         LoadMisalignedFaultM | StoreAmoMisalignedFaultM |
                         BothInstrPageFaultM | LoadPageFaultM | StoreAmoPageFaultM |
+                        HPTWInstrGuestPageFaultM | LoadGuestPageFaultM | StoreAmoGuestPageFaultM |
                         BreakpointFaultM | EcallFaultM | VirtualInstrFaultM |
                         LoadAccessFaultM | StoreAmoAccessFaultM;
   end else begin: exception_noh
@@ -170,6 +173,7 @@ module trap import cvw::*;  #(parameter cvw_t P) (
     else if (P.H_SUPPORTED & ValidIntsM[2])                   CauseM = 5'd2;  // Virtual Supervisor Software Int
     else if (P.H_SUPPORTED & ValidIntsM[6])                   CauseM = 5'd6;  // Virtual Supervisor Timer Int
     else if (BothInstrPageFaultM)                             CauseM = 5'd12;
+    else if (P.H_SUPPORTED & HPTWInstrGuestPageFaultM)        CauseM = 5'd20; // Instruction Guest-Page Fault
     else if (P.H_SUPPORTED & VirtualInstrFaultM)              CauseM = 5'd22; // Virtual Instruction Fault
     else if (BothInstrAccessFaultM)                           CauseM = 5'd1;
     else if (IllegalInstrFaultM)                              CauseM = 5'd2;
@@ -182,9 +186,10 @@ module trap import cvw::*;  #(parameter cvw_t P) (
                                                                                                                   : {1'b0, 2'b10, PrivilegeModeW};
     else if (StoreAmoMisalignedFaultM & ~P.ZICCLSM_SUPPORTED) CauseM = 5'd6;  // misaligned faults are higher priority if they always are taken
     else if (LoadMisalignedFaultM & ~P.ZICCLSM_SUPPORTED)     CauseM = 5'd4;
-    // TODO: Add guest-page-fault cause generation (20/21/23) when two-stage translation fault signals are integrated.
     else if (StoreAmoPageFaultM)                              CauseM = 5'd15;
     else if (LoadPageFaultM)                                  CauseM = 5'd13;
+    else if (P.H_SUPPORTED & StoreAmoGuestPageFaultM)         CauseM = 5'd23; // Store/AMO Guest-Page Fault
+    else if (P.H_SUPPORTED & LoadGuestPageFaultM)             CauseM = 5'd21; // Load Guest-Page Fault
     else if (StoreAmoAccessFaultM)                            CauseM = 5'd7;
     else if (LoadAccessFaultM)                                CauseM = 5'd5;
     else if (StoreAmoMisalignedFaultM & P.ZICCLSM_SUPPORTED)  CauseM = 5'd6; // See priority in Privileged Spec 3.1.15

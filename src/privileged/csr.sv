@@ -58,6 +58,7 @@ module csr import cvw::*;  #(parameter cvw_t P) (
   input  logic                     HLVHSVLegalM,              // Legal HLV/HLVX/HSV memory access in M stage
   input  logic [4:0]               CauseM,                    // Trap cause
   input  logic                     SelHPTW,                   // hardware page table walker active, so base endianness on supervisor mode
+  input  logic [P.XLEN-1:0]        GuestPageAdrM,             // guest physical address >> 2 of a guest-page fault, for htval/mtval2
   // inputs for performance counters
   input  logic                     LoadStallD, StoreStallD,
   input  logic                     ICacheStallF,
@@ -423,8 +424,15 @@ module csr import cvw::*;  #(parameter cvw_t P) (
   // MPRV, or HLV/HSV), so the HS-level satp is exported unmodified.
   assign SATP_REGW = SATP_REGW_INT;
 
-  // Until two-stage translation is integrated, htval trap writes stay zero.
-  assign NextHtvalM = '0;
+  // htval (traps to HS) and mtval2 (traps to M) receive the faulting guest physical address
+  // shifted right by 2 for guest-page faults, and zero for every other trap.
+  if (P.H_SUPPORTED) begin: htval
+    always_comb
+      if (~InterruptM & ((CauseM == 5'd20) | (CauseM == 5'd21) | (CauseM == 5'd23))) NextHtvalM = GuestPageAdrM;
+      else                                                                             NextHtvalM = '0;
+  end else begin: nohtval
+    assign NextHtvalM = '0;
+  end
 
   if (P.H_SUPPORTED & P.VIRTMEM_SUPPORTED) begin: hlsv_bare
     if (P.XLEN == 64) begin: hlsv_bare64

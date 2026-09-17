@@ -70,6 +70,9 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
   input  logic              HPTWInstrPageFaultF,                            // hardware page table page fault while fetching instruction PTE
   input  logic              InstrPageFaultF,                                // page faults
   input  logic              LoadPageFaultM, StoreAmoPageFaultM,             // page faults
+  input  logic              LoadGuestPageFaultM, StoreAmoGuestPageFaultM,   // G-stage faults on data accesses
+  input  logic              HPTWInstrGuestPageFaultF,                       // G-stage fault while fetching an instruction
+  input  logic [P.XLEN-1:0] HPTWGPAM,                                       // guest physical address >> 2 of a data-side guest-page fault
   input  logic              InstrMisalignedFaultM,                          // misaligned instruction fault
   input  logic              LoadMisalignedFaultM, StoreAmoMisalignedFaultM, // misaligned data fault
   input  logic              IllegalIEUFPUInstrD,                            // illegal instruction from IEU or FPU
@@ -135,6 +138,9 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
   logic                     ExceptionM;                                     // Memory stage instruction caused a fault
   logic                     HPTWInstrAccessFaultM;                          // Hardware page table access fault while fetching instruction PTE
   logic                     HPTWInstrPageFaultM;                            // Hardware page table page fault while fetching instruction PTE
+  logic                     HPTWInstrGuestPageFaultM;                       // G-stage fault while fetching instruction, delayed to Mem stage
+  logic [P.XLEN-1:0]        HPTWInstrGPAM;                                  // guest physical address >> 2 of that fault, delayed with it
+  logic [P.XLEN-1:0]        GuestPageAdrM;                                  // guest physical address >> 2 for htval/mtval2
   logic                     BreakpointFaultM, EcallFaultM;                  // breakpoint and Ecall traps should retire
 
   logic                     wfiW;
@@ -170,7 +176,7 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
     .BPDirWrongM, .BTAWrongM, .RASPredPCWrongM, .BPWrongM,
     .sfencevmaM, .ExceptionM, .InvalidateICacheM, .ICacheStallF, .DCacheStallM, .DivBusyE, .FDivBusyE,
     .IClassWrongM, .IClassM, .DCacheMiss, .DCacheAccess, .ICacheMiss, .ICacheAccess,
-    .NextPrivilegeModeM, .PrivilegeModeW, .VirtModeW, .HLVHSVLegalM, .CauseM, .SelHPTW,
+    .NextPrivilegeModeM, .PrivilegeModeW, .VirtModeW, .HLVHSVLegalM, .CauseM, .SelHPTW, .GuestPageAdrM,
     .STATUS_MPP, .MSTATUS_MPV, .STATUS_SPP, .STATUS_TSR, .STATUS_TVM,
     .STATUS_MIE, .STATUS_SIE, .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_TW, .STATUS_FS,
     .VSSTATUS_MXR, .VSSTATUS_SUM,
@@ -182,9 +188,14 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
     .CSRReadValW, .IllegalCSRAccessM, .VirtualCSRAccessM, .VirtualCMOInstrM, .HLVHSVBareM, .BigEndianM);
 
   // pipeline early-arriving trap sources
-  privpiperegs ppr(.clk, .reset, .StallD, .StallE, .StallM, .FlushD, .FlushE, .FlushM,
+  privpiperegs #(.XLEN(P.XLEN), .H_SUPPORTED(P.H_SUPPORTED)) ppr(.clk, .reset, .StallD, .StallE, .StallM, .FlushD, .FlushE, .FlushM,
     .InstrPageFaultF, .InstrAccessFaultF, .HPTWInstrAccessFaultF, .HPTWInstrPageFaultF, .IllegalIEUFPUInstrD,
-    .InstrPageFaultM, .InstrAccessFaultM, .HPTWInstrAccessFaultM, .HPTWInstrPageFaultM, .IllegalIEUFPUInstrM);
+    .HPTWInstrGuestPageFaultF, .HPTWGPAF(HPTWGPAM),
+    .InstrPageFaultM, .InstrAccessFaultM, .HPTWInstrAccessFaultM, .HPTWInstrPageFaultM, .IllegalIEUFPUInstrM,
+    .HPTWInstrGuestPageFaultM, .HPTWInstrGPAM);
+  // The data-side GPA is valid in the Memory stage while the walker presents its fault;
+  // the instruction-side GPA travels down the pipeline with its fault.
+  assign GuestPageAdrM = HPTWInstrGuestPageFaultM ? HPTWInstrGPAM : HPTWGPAM;
 
   // trap logic
   trap #(P) trap(.reset,
@@ -195,6 +206,7 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
     .PrivilegeModeW, .VirtModeW,
     .MIP_REGW, .MIE_REGW, .MIDELEG_REGW, .MEDELEG_REGW, .HEDELEG_REGW, .HIDELEG_REGW, .STATUS_MIE, .STATUS_SIE, .VSSTATUS_SIE,
     .InstrValidM, .CommittedM, .CommittedF,
+    .LoadGuestPageFaultM, .StoreAmoGuestPageFaultM, .HPTWInstrGuestPageFaultM,
     .TrapM, .wfiM, .wfiW, .InterruptM, .ExceptionM, .IntPendingM, .DelegateM, .CauseM,
     .TrapToM, .TrapToHSM, .TrapToVSM);
 endmodule

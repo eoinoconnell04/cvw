@@ -104,11 +104,11 @@ module csrm  import cvw::*;  #(parameter cvw_t P) (
   /* verilator lint_off UNUSEDPARAM */
   // Constants
   localparam ZERO = {(P.XLEN){1'b0}};
-  // medeleg is architecturally 64 bits; enable the implemented H causes (VS ECALL and virtual instruction)
-  // in addition to the existing delegatable base causes. When compressed instructions are supported,
-  // there cannot be instruction-address-misaligned exceptions.
+  // medeleg is architecturally 64 bits; enable the implemented H causes (VS ECALL, virtual instruction,
+  // and the three guest-page faults) in addition to the existing delegatable base causes. When
+  // compressed instructions are supported, there cannot be instruction-address-misaligned exceptions.
   localparam [63:0] MEDELEG_MASK = (P.ZCA_SUPPORTED ? 64'h0000_0000_0000_B3FE : 64'h0000_0000_0000_B3FF) |
-                                   (P.H_SUPPORTED ? 64'h0000_0000_0040_0400 : 64'h0000_0000_0000_0000);
+                                   (P.H_SUPPORTED ? 64'h0000_0000_00F0_0400 : 64'h0000_0000_0000_0000);
   localparam [15:0] MIDELEG_MASK = 16'h0222; // only standard S-level interrupt delegation bits are writable
   localparam [15:0] MIDELEG_RO1  = P.H_SUPPORTED ? (16'h0444 | ((P.GEILEN > 0) ? 16'h1000 : 16'h0000)) : 16'h0000; // VS-level and guest external interrupts are always delegated past M
   localparam Gm1 = P.PMP_G > 0 ? P.PMP_G - 1 : 0; // max(G-1, 0)

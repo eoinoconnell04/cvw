@@ -236,11 +236,12 @@ module csrh import cvw::*;  #(parameter cvw_t P) (
   assign SretFromHSM = sretM & (PrivilegeModeW == P.S_MODE) & ~VirtModeW;
   assign SretFromVSM = sretM & (PrivilegeModeW == P.S_MODE) &  VirtModeW;
 
-  // mtinst/htinst/mtval2 are derived from the trapped instruction (InstrM); not yet implemented.
+  // mtinst/htinst are derived from the trapped instruction (InstrM); not yet implemented.
   // We write 0 on traps for now, which is spec compliant (indicating transformation not supported).
+  // mtval2 receives the guest physical address >> 2 for guest-page faults taken into M-mode.
   assign NextMtinstM = TrapToM   ? '0 : CSRWriteValM;
   assign NextHtinstM = TrapToHSM ? '0 : CSRWriteValM;
-  assign NextMtval2M = TrapToM   ? '0 : CSRWriteValM;
+  assign NextMtval2M = TrapToM   ? NextHtvalM : CSRWriteValM;
 
   // Write enables for each CSR (from CSR instruction)
   assign WriteMTINSTM     = CSRMWriteM & (CSRAdrM == MTINST);
@@ -299,9 +300,8 @@ module csrh import cvw::*;  #(parameter cvw_t P) (
   flopenr #(P.XLEN) MTINSTreg(clk, reset, (WriteMTINSTM | TrapToM), NextMtinstM, MTINST_REGW);
 
   // MTVAL2
-  // On traps to M, mtval2 is written with trap information; writing zero is always compliant.
-  // TODO: Consider using paddr; mtval2 is written with either zero or the guest physical
-  // address that faulted, shifted right by 2 bits
+  // On traps to M, mtval2 is written with the guest physical address >> 2 for guest-page
+  // faults and zero otherwise.
   flopenr #(P.XLEN) MTVAL2reg(clk, reset, (WriteMTVAL2M | TrapToM), NextMtval2M, MTVAL2_REGW);
 
   // HSTATUS

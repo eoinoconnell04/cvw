@@ -69,6 +69,10 @@ module lsu import cvw::*;  #(parameter cvw_t P) (
   output logic                    LoadAccessFaultM,                     // Load access fault (PMA)
   output logic                    HPTWInstrAccessFaultF,                // HPTW generated access fault during instruction fetch
   output logic                    HPTWInstrPageFaultF,                  // HPTW generated access fault during instruction fetch
+  output logic                    LoadGuestPageFaultM,                  // G-stage fault on a load (hypervisor)
+  output logic                    StoreAmoGuestPageFaultM,              // G-stage fault on a store/AMO (hypervisor)
+  output logic                    HPTWInstrGuestPageFaultF,             // G-stage fault on an instruction fetch (hypervisor)
+  output logic [P.XLEN-1:0]       HPTWGPAM,                             // guest physical address >> 2 of a guest-page fault
   // cpu hazard unit (trap)
   output logic                    StoreAmoMisalignedFaultM,             // Store or AMO address misaligned fault
   output logic                    StoreAmoAccessFaultM,                 // Store or AMO access fault
@@ -215,14 +219,15 @@ module lsu import cvw::*;  #(parameter cvw_t P) (
       .DTLBMissOrUpdateDAM, .DTLBWriteM,
       .FlushW, .DCacheBusStallM, .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .VirtModeW, .MSTATUS_MPV, .PCSpillF,
       .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .VSSTATUS_MXR, .VSSTATUS_SUM, .HSTATUS_SPVP, .HLVHSVLegalM,
-      .ENVCFG_ADUE, .VSENVCFG_ADUE, .PrivilegeModeW,
+      .ENVCFG_PBMTE, .VSENVCFG_PBMTE, .ENVCFG_ADUE, .VSENVCFG_ADUE, .PrivilegeModeW,
       .ReadDataM(ReadDataM[P.XLEN-1:0]), // ReadDataM is LLEN, but HPTW only needs XLEN
       .WriteDataM(WriteDataZM), .Funct3M, .LSUFunct3M, .Funct7M, .LSUFunct7M,
       .IEUAdrExtM, .PTE, .IHWriteDataM, .PageType, .PreLSURWM, .LSUAtomicM,
       .IHAdrM, .CMOpM, .LSUCMOpM, .HPTWStall, .SelHPTW,
       .HPTWFlushW, .LSULoadAccessFaultM, .LSUStoreAmoAccessFaultM,
       .LoadAccessFaultM, .StoreAmoAccessFaultM, .HPTWInstrAccessFaultF,
-      .LoadPageFaultM, .StoreAmoPageFaultM, .LSULoadPageFaultM, .LSUStoreAmoPageFaultM, .HPTWInstrPageFaultF
+      .LoadPageFaultM, .StoreAmoPageFaultM, .LSULoadPageFaultM, .LSUStoreAmoPageFaultM, .HPTWInstrPageFaultF,
+      .LoadGuestPageFaultM, .StoreAmoGuestPageFaultM, .HPTWInstrGuestPageFaultF, .HPTWGPAM
 );
   end else begin // No HPTW, so signals are not multiplexed
     assign PreLSURWM = GatedMemRWM;
@@ -238,6 +243,8 @@ module lsu import cvw::*;  #(parameter cvw_t P) (
     assign StoreAmoPageFaultM = LSUStoreAmoPageFaultM;
     assign {HPTWStall, SelHPTW, PTE, PageType, DTLBWriteM, ITLBWriteF, HPTWFlushW} = '0;
     assign {HPTWInstrAccessFaultF, HPTWInstrPageFaultF} = '0;
+    assign {LoadGuestPageFaultM, StoreAmoGuestPageFaultM, HPTWInstrGuestPageFaultF} = '0;
+    assign HPTWGPAM = '0;
    end
 
   // CommittedM indicates the cache, bus, or HPTW are busy with a multiple cycle operation.
