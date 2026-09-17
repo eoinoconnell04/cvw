@@ -89,6 +89,7 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
   logic [3:0]                    CMOpM;                           // 1: cbo.inval; 2: cbo.flush; 4: cbo.clean; 8: cbo.zero
   logic                          IFUPrefetchE, LSUPrefetchM;      // instruction / data prefetch hints
   logic                          HLVHSVInstrM;                    // Valid HLV/HLVX/HSV encoding in Memory stage
+  logic                          HLVXInstrM;                      // HLVX.HU/HLVX.WU in Memory stage
   logic                          HLVHSVLegalM;                    // HLV/HLVX/HSV may issue its LSU access
   logic                          HSTATUS_SPVP;                    // HLV/HLVX/HSV effective privilege
 
@@ -228,12 +229,12 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
      // hazards
      .StallD, .StallE, .StallM, .StallW, .FlushD, .FlushE, .FlushM, .FlushW,
      .StructuralStallD, .LoadStallD, .StoreStallD, .PCSrcE,
-     .CSRReadM, .CSRWriteM, .PrivilegedM, .CSRWriteFenceM, .InvalidateICacheM, .HLVHSVInstrM);
+     .CSRReadM, .CSRWriteM, .PrivilegedM, .CSRWriteFenceM, .InvalidateICacheM, .HLVHSVInstrM, .HLVXInstrM);
 
   lsu #(P) lsu(
     .clk, .reset, .StallM, .FlushM, .StallW, .FlushW,
     // CPU interface
-    .MemRWE, .MemRWM, .Funct3M, .Funct7M(InstrM[31:25]), .AtomicM, .HLVHSVInstrM, .HLVHSVLegalM,
+    .MemRWE, .MemRWM, .Funct3M, .Funct7M(InstrM[31:25]), .AtomicM, .HLVHSVInstrM, .HLVHSVLegalM, .HLVXInstrM,
     .CommittedM, .DCacheMiss, .DCacheAccess, .SquashSCW,
     .FpLoadStoreM, .FWriteDataM, .IEUAdrE, .IEUAdrM, .WriteDataM,
     .ReadDataW, .FlushDCacheM, .CMOpM, .LSUPrefetchM,

@@ -377,9 +377,12 @@ Scenarios:
 - I: HLV.D/HSV.D from M-mode (`V=0`) through the scenario C tables with
   `hstatus.SPVP=1`; an HLV of an unmapped GPA (load guest-page fault with
   `mtval2`); and an HLV with `SPVP=0` of a supervisor page (load page fault)
+- J: HLVX.WU requires execute permission: it succeeds on an RWX page, and on
+  a read-only VS-stage alias of the same guest physical page HLV.W succeeds
+  while HLVX.WU takes a load page fault with `mtval` = GVA
 
 On failure the test writes `tohost = (code << 1) | 1`, where `code` is the
-scenario number (A=1 ... I=9), so the failing scenario can be read from the
+scenario number (A=1 ... J=10), so the failing scenario can be read from the
 testbench `tohost write` message.
 
 How two-stage translation is implemented (see the header of `src/mmu/hptw.sv`
@@ -404,8 +407,6 @@ for the walker-level description):
 
 Known limitations:
 
-- HLVX.HU/HLVX.WU are translated like ordinary HLV loads: the
-  execute-permission check that distinguishes them is not implemented.
 - `vsstatus.MXR` can relax reads of a merged entry whose G-stage page is
   execute-only even when the HS-level `MXR` is clear.
 - With `vsatp` Bare, guest physical addresses wider than the configuration's

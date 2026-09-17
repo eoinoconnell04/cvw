@@ -43,6 +43,7 @@ module mmu import cvw::*;  #(parameter cvw_t P,
   input  logic                 VSSTATUS_SUM,       // vsstatus.SUM: applies to VS-stage translation
   input  logic                 HSTATUS_SPVP,       // HLV/HLVX/HSV effective privilege: 0=VU, 1=VS
   input  logic                 HLVHSVLegalM,       // HLV/HLVX/HSV memory access: translate as if V=1
+  input  logic                 HLVXM,              // HLVX.HU/HLVX.WU access: permission checked as an instruction fetch
   input  logic                 ENVCFG_PBMTE,       // Page-based memory types enabled (HS level and G-stage)
   input  logic                 ENVCFG_ADUE,        // HPTW A/D Update enable (HS level and G-stage)
   input  logic                 VSENVCFG_PBMTE,     // Page-based memory types enabled (VS-stage)
@@ -151,7 +152,7 @@ module mmu import cvw::*;  #(parameter cvw_t P,
           .clk, .reset,
           .SATP_MODE(EffSATP[P.XLEN-1:P.XLEN-P.SVMODE_BITS]),
           .SATP_ASID(EffSATP[P.ASID_BASE+P.ASID_BITS-1:P.ASID_BASE]),
-          .VirtTag(EffVirtModeW), .VMID, .GStageActive,
+          .VirtTag(EffVirtModeW), .VMID, .GStageActive, .HLVXM,
           .VAdr(VAdr[P.XLEN-1:0]), .STATUS_MXR(EffMXR), .STATUS_SUM(EffSUM), .STATUS_MPRV, .STATUS_MPP,
           .ENVCFG_PBMTE(EffPBMTE), .ENVCFG_ADUE(EffADUE),
           .EffectivePrivilegeModeW, .ReadAccess, .WriteAccess, .CMOpM,

@@ -42,6 +42,7 @@ module lsu import cvw::*;  #(parameter cvw_t P) (
   input  logic [1:0]              AtomicM,                              // Atomic memory operation
   input  logic                    HLVHSVInstrM,                         // Valid HLV/HLVX/HSV encoding in Memory stage
   input  logic                    HLVHSVLegalM,                         // HLV/HLVX/HSV may issue its LSU access
+  input  logic                    HLVXInstrM,                           // HLVX.HU/HLVX.WU: check execute instead of read permission
   input  logic                    FlushDCacheM,                         // Flush D cache to next level of memory
   input  logic [3:0]              CMOpM,                                // 1: cbo.inval; 2: cbo.flush; 4: cbo.clean; 8: cbo.zero
   input  logic                    LSUPrefetchM,                         // Prefetch; presently unused
@@ -219,6 +220,7 @@ module lsu import cvw::*;  #(parameter cvw_t P) (
       .DTLBMissOrUpdateDAM, .DTLBWriteM,
       .FlushW, .DCacheBusStallM, .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .VirtModeW, .MSTATUS_MPV, .PCSpillF,
       .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .VSSTATUS_MXR, .VSSTATUS_SUM, .HSTATUS_SPVP, .HLVHSVLegalM,
+      .HLVXM(HLVHSVLegalM & HLVXInstrM),
       .ENVCFG_PBMTE, .VSENVCFG_PBMTE, .ENVCFG_ADUE, .VSENVCFG_ADUE, .PrivilegeModeW,
       .ReadDataM(ReadDataM[P.XLEN-1:0]), // ReadDataM is LLEN, but HPTW only needs XLEN
       .WriteDataM(WriteDataZM), .Funct3M, .LSUFunct3M, .Funct7M, .LSUFunct7M,
@@ -272,6 +274,7 @@ module lsu import cvw::*;  #(parameter cvw_t P) (
     mmu #(.P(P), .TLB_ENTRIES(P.DTLB_ENTRIES), .IMMU(0))
     dmmu(.clk, .reset, .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .VirtModeW, .MSTATUS_MPV,
       .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .VSSTATUS_MXR, .VSSTATUS_SUM, .HSTATUS_SPVP, .HLVHSVLegalM,
+      .HLVXM(HLVHSVLegalM & HLVXInstrM),
       .ENVCFG_PBMTE, .ENVCFG_ADUE, .VSENVCFG_PBMTE, .VSENVCFG_ADUE,
       .PrivilegeModeW, .DisableTranslation, .VAdr(IHAdrM), .Size(LSUFunct3M[1:0]),
       .PTE, .PageTypeWriteVal(PageType), .TLBWrite(DTLBWriteM), .TLBFlush(sfencevmaM),

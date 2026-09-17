@@ -71,6 +71,7 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
   input  logic              VSSTATUS_MXR, VSSTATUS_SUM, // vsstatus bits applied to VS-stage translation
   input  logic              HSTATUS_SPVP,           // HLV/HLVX/HSV effective privilege: 0=VU, 1=VS
   input  logic              HLVHSVLegalM,           // HLV/HLVX/HSV access in Memory stage: translate as if V=1
+  input  logic              HLVXM,                  // HLVX.HU/HLVX.WU access: permission checked as an instruction fetch
   input  logic              ENVCFG_PBMTE,           // Svpbmt enable (HS level and G-stage)
   input  logic              VSENVCFG_PBMTE,         // Svpbmt enable (VS-stage)
   input  logic              ENVCFG_ADUE,            // HPTW A/D Update enable (HS level and G-stage)
@@ -174,6 +175,7 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
   logic [1:0]               EffectivePrivilegeMode;
   logic                     ImproperPrivilege;
   logic                     SetDirty, VSSetDirty;
+  logic                     HLVXWalk;               // data walk for HLVX: execute permission instead of read, no SUM/MXR
   logic [P.XLEN-1:0]        AccessedPTE;
   logic                     LeafMisaligned;         // stage-1 leaf superpage has nonzero low PPN bits
   // G-stage
@@ -335,15 +337,16 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
   end else begin: effpriv_noh
     assign EffectivePrivilegeMode = DTLBWalk ? (STATUS_MPRV ? STATUS_MPP : PrivilegeModeW) : PrivilegeModeW;
   end
+  assign HLVXWalk = P.H_SUPPORTED & DTLBWalk & HLVHSVLegalM & HLVXM;
   assign ImproperPrivilege = ((EffectivePrivilegeMode == P.U_MODE) & ~PTE_U) |
-                             ((EffectivePrivilegeMode == P.S_MODE) & PTE_U & (~EffSUM & DTLBWalk));
+                             ((EffectivePrivilegeMode == P.S_MODE) & PTE_U & ((~EffSUM & DTLBWalk) | HLVXWalk));
 
   // Check for page faults
   vm64check #(P) vm64check(.SATP_MODE(EffSATP[P.XLEN-1:P.XLEN-P.SVMODE_BITS]), .VAdr(TranslationVAdr),
     .SV39Mode(), .SV48Mode(), .UpperBitsUnequal);
   // This register is not functionally necessary, but improves the critical path.
   flopr #(1) upperbitsunequalreg(clk, reset, UpperBitsUnequal, UpperBitsUnequalD);
-  assign InvalidRead = ReadAccess & ~Readable & (~EffMXR | ~Executable);
+  assign InvalidRead = ReadAccess & (HLVXWalk ? ~Executable : (~Readable & (~EffMXR | ~Executable)));
   assign InvalidWrite = WriteAccess & ~Writable;
   assign InvalidOp = DTLBWalk ? (InvalidRead | InvalidWrite) : ~Executable;
   assign OtherPageFault = ImproperPrivilege | InvalidOp | UpperBitsUnequalD | Misaligned | ~Valid;
@@ -354,8 +357,8 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
     logic ImproperPrivilegeFull, InvalidReadFull, InvalidWriteFull, InvalidOpFull;
     // Instruction walks: S may not execute U pages; data walks: S may access U pages only with SUM
     assign ImproperPrivilegeFull = ((EffectivePrivilegeMode == P.U_MODE) & ~PTE_U) |
-                                   ((EffectivePrivilegeMode == P.S_MODE) & PTE_U & (~DTLBWalk | ~EffSUM));
-    assign InvalidReadFull  = (ReadAccess | (|CMOpM[2:0])) & ~Readable & (~EffMXR | ~Executable);
+                                   ((EffectivePrivilegeMode == P.S_MODE) & PTE_U & (~DTLBWalk | ~EffSUM | HLVXWalk));
+    assign InvalidReadFull  = (ReadAccess | (|CMOpM[2:0])) & (HLVXWalk ? ~Executable : (~Readable & (~EffMXR | ~Executable)));
     assign InvalidWriteFull = (WriteAccess | CMOpM[3]) & ~Writable;
     assign InvalidOpFull    = DTLBWalk ? (InvalidReadFull | InvalidWriteFull) : ~Executable;
     assign VSOtherFault = ImproperPrivilegeFull | InvalidOpFull | UpperBitsUnequalD | LeafMisaligned | ~Valid |
@@ -388,9 +391,9 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
   // pages readable. Missing A/D bits are updated when Svadu is enabled for the G-stage
   // (menvcfg.ADUE) and are otherwise guest-page faults.
   if (P.H_SUPPORTED) begin: gleafcheck
-    assign GReadNeeded  = (GPurpose == GIMPLICIT_RD) | ((GPurpose == GFINAL) & DTLBWalk & (ReadAccess | (|CMOpM[2:0])));
+    assign GReadNeeded  = (GPurpose == GIMPLICIT_RD) | ((GPurpose == GFINAL) & DTLBWalk & ~HLVXWalk & (ReadAccess | (|CMOpM[2:0])));
     assign GWriteNeeded = (GPurpose == GIMPLICIT_WR) | ((GPurpose == GFINAL) & DTLBWalk & (WriteAccess | CMOpM[3]));
-    assign GExecNeeded  = (GPurpose == GFINAL) & ~DTLBWalk;
+    assign GExecNeeded  = (GPurpose == GFINAL) & (~DTLBWalk | HLVXWalk);
     assign GInvalidRead  = GReadNeeded & ~Readable & (~STATUS_MXR | ~Executable);
     assign GInvalidWrite = GWriteNeeded & ~Writable;
     assign GInvalidExec  = GExecNeeded & ~Executable;

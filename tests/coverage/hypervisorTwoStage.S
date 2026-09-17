@@ -28,6 +28,9 @@
 //               two-stage translation, an HLV of an unmapped GPA is a load
 //               guest-page fault, and an HLV with SPVP=0 (VU privilege) of a
 //               supervisor page is an ordinary load page fault (13)
+//            J. HLVX.WU requires execute permission: it succeeds on the RWX
+//               page of scenario C, faults (13) on a read-only VS-stage
+//               mapping of the same guest physical page where HLV.W succeeds
 //
 //          On failure the test writes tohost = (code << 1) | 1, where code
 //          identifies the scenario (see FAIL_* below), so a failing run can be
@@ -79,6 +82,17 @@
 .equ FAIL_G,            7
 .equ FAIL_H,            8
 .equ FAIL_I,            9
+.equ FAIL_J,            10
+
+.equ VS_PTE_FLAGS_RO,   0xC3                # D=1,A=1,G=0,U=0,X=0,W=0,R=1,V=1 (read-only supervisor page)
+.equ GVA_J,             0x300000000         # VS index 12 -> GPA_C, read-only
+
+.macro HLV_W rd, rs1
+    .word 0x68004073 | (\rd << 7) | (\rs1 << 15)
+.endm
+.macro HLVX_WU rd, rs1
+    .word 0x68304073 | (\rd << 7) | (\rs1 << 15)
+.endm
 
 .equ CSR_HSTATUS,       0x600
 .equ HSTATUS_SPVP,      0x0000000000000100
@@ -179,6 +193,8 @@ main:
     SET_GIGA_PTE vs_table_c, 8, s3, VS_PTE_FLAGS
     li   s3, GPA_G
     SET_GIGA_PTE vs_table_c, 11, s3, VS_PTE_FLAGS
+    li   s3, GPA_C
+    SET_GIGA_PTE vs_table_c, 12, s3, VS_PTE_FLAGS_RO   # read-only alias of GPA_C for scenario J
 
     # g_table_c: index 2 identity, index 7 -> canary_c's gigapage
     SET_GIGA_PTE g_table_c, 2, s2, G_PTE_FLAGS
@@ -334,6 +350,43 @@ after_i_gpf:
 after_i_pf:
     EXPECT_EQ s4, CAUSE_LOAD_PF, FAIL_I
     EXPECT_EQ s7, 0, FAIL_I
+
+    #############################################################
+    # Scenario J: HLVX.WU needs execute permission. GVA_C maps canary_c's
+    # page RWX; GVA_J maps the same guest physical page read-only.
+    #############################################################
+    li   t0, HSTATUS_SPVP
+    csrs CSR_HSTATUS, t0
+    la   t2, canary_c
+    li   t3, GIGAOFF_MASK
+    and  t2, t2, t3
+    li   t1, GVA_C
+    add  t1, t1, t2
+    HLVX_WU 11, 6              # a1 = HLVX.WU (t1) on the RWX page
+    EXPECT_EQ a1, 0x33333333, FAIL_J
+    li   t1, GVA_J
+    add  t1, t1, t2
+    HLV_W 11, 6                # HLV.W on the read-only page succeeds
+    EXPECT_EQ a1, 0x33333333, FAIL_J
+    la   t0, after_j_pf
+    la   t3, current_continue_pc
+    sd   t0, 0(t3)
+    HLVX_WU 11, 6              # HLVX.WU on the read-only page: load page fault
+after_j_pf:
+    EXPECT_EQ s4, CAUSE_LOAD_PF, FAIL_J
+    li   t3, GIGAOFF_MASK
+    and  t2, t2, t3
+    li   t6, GVA_J
+    add  t6, t6, t2
+    bne  s6, t6, fail_j        # mtval = GVA
+    EXPECT_EQ s7, 0, FAIL_J
+    j    1f
+fail_j:
+    li   a0, FAIL_J
+    j    fail
+1:
+    li   t0, HSTATUS_SPVP
+    csrc CSR_HSTATUS, t0
 
     csrw CSR_MTVEC, s1
     csrw CSR_VSATP, zero

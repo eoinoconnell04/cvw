@@ -30,6 +30,7 @@
 module tlbcontrol import cvw::*;  #(parameter cvw_t P, ITLB = 0) (
   input  logic [P.SVMODE_BITS-1:0] SATP_MODE,          // stage-1 translation mode (satp, or vsatp when virtualized)
   input  logic                     GStageActive,       // virtualized access with hgatp not Bare
+  input  logic                     HLVXM,              // HLVX.HU/HLVX.WU: permission checked as an instruction fetch
   input  logic [P.XLEN-1:0]        VAdr,
   input  logic                     STATUS_MXR, STATUS_SUM, STATUS_MPRV,
   input  logic [1:0]               STATUS_MPP,
@@ -118,12 +119,14 @@ module tlbcontrol import cvw::*;  #(parameter cvw_t P, ITLB = 0) (
     // User mode may only load/store from user mode pages, and supervisor mode
     // may only access user mode pages when STATUS_SUM is low. With VS-stage Bare
     // there is no stage-1 PTE; the G-stage user-level check was made by the walker.
+    // HLVX is checked like an instruction fetch: SUM does not apply.
     assign ImproperPrivilege = (((EffectivePrivilegeModeW == P.U_MODE) & ~PTE_U) |
-      ((EffectivePrivilegeModeW == P.S_MODE) & PTE_U & ~STATUS_SUM)) & ~VSStageBare;
+      ((EffectivePrivilegeModeW == P.S_MODE) & PTE_U & (~STATUS_SUM | HLVXM))) & ~VSStageBare;
     // Check for read error. Reads are invalid when the page is not readable
     // (and executable pages are not readable) or when the page is neither
     // readable nor executable (and executable pages are readable).
-    assign InvalidRead = ReadAccess & ~PTE_R & (~STATUS_MXR | ~PTE_X);
+    // HLVX requires execute permission instead of read permission, and ignores MXR.
+    assign InvalidRead = ReadAccess & (HLVXM ? ~PTE_X : (~PTE_R & (~STATUS_MXR | ~PTE_X)));
     // Check for write error. Writes are invalid when the page's write bit is 0.
     assign InvalidWrite = WriteAccess & ~PTE_W;
     assign InvalidCBOM = (|CMOpM[2:0]) & (~PTE_R & (~STATUS_MXR | ~PTE_X));
