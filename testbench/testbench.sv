@@ -743,9 +743,27 @@ module testbench;
   logic [P.XLEN-1:0] PCM;
   // PCM is not valid for configurations without ZICSR or branch predictor
   flopenr #(P.XLEN) PCMReg(clk, reset, ~dut.core.StallM, dut.core.PCE, PCM);
+  logic TohostWriteM, TohostWriteMQ;
+  assign TohostWriteM = (dut.core.lsu.IEUAdrM == ProgramAddrLabelArray["tohost"]) & (dut.core.lsu.IEUAdrM != 0) &
+                        (InstrMName == "SW" | InstrMName == "SD") & dut.core.InstrValidM;
   always @(posedge clk) begin
     TestComplete <= ((InstrM == 32'h6f) & dut.core.InstrValidM ) |
        ((dut.core.lsu.IEUAdrM == ProgramAddrLabelArray["tohost"] & dut.core.lsu.IEUAdrM != 0) & InstrMName == "SW"); // |
+    // Report the value written to tohost for single-ELF runs without lockstep, where the
+    // testbench otherwise gives no pass/fail signal (riscv-tests HTIF convention: value 1 = pass).
+    // Printed on the first cycle the store reaches the Memory stage, even if it then stalls.
+    TohostWriteMQ <= TohostWriteM;
+    if (TohostWriteM & ~TohostWriteMQ)
+      $display("tohost write: value = 0x%x  PC = %x", dut.core.WriteDataM, dut.core.PCM);
+`ifdef TRACEPC
+    // Optional retired-instruction trace for debugging single-ELF runs without lockstep:
+    // wsim <config> --elf <file> --define "+define+TRACEPC"
+    if (dut.core.InstrValidM & ~dut.core.StallM & ~dut.core.FlushW)
+      $display("PC=%x instr=%08x %s priv=%d V=%d", dut.core.PCM, InstrM, InstrMName,
+               dut.core.priv.priv.PrivilegeModeW, dut.core.priv.priv.VirtModeW);
+    if (dut.core.priv.priv.trap.TrapM & ~dut.core.StallM)
+      $display("  TRAP cause=%d interrupt=%d PC=%x", dut.core.priv.priv.CauseM, dut.core.priv.priv.InterruptM, dut.core.PCM);
+`endif
     //   (functionName.PCM == 0 & dut.core.ifu.InstrM == 0 & dut.core.InstrValidM & PrevPCZero));
     if (reset) PrevPCZero <= 0;
     else if (dut.core.InstrValidM) PrevPCZero <= (PCM == 0 & dut.core.ifu.InstrM == 0);
