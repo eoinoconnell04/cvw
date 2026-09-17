@@ -90,17 +90,22 @@ module csr import cvw::*;  #(parameter cvw_t P) (
   output logic [15:0]              HIDELEG_REGW,
   output logic [15:0]              HIE_REGW,
   output logic [P.XLEN-1:0]        HGEIE_REGW,
-  output logic [P.XLEN-1:0]        SATP_REGW,
+  output logic [P.XLEN-1:0]        SATP_REGW,                 // HS-level satp (VS-stage/G-stage state is exported separately)
+  output logic [P.XLEN-1:0]        VSATP_REGW,                // vsatp: VS-stage translation when V=1 or for HLV/HSV
+  output logic [P.XLEN-1:0]        HGATP_REGW,                // hgatp: G-stage translation when V=1 or for HLV/HSV
   output logic [15:0]              MIP_REGW, MIE_REGW, MIDELEG_REGW,
   output logic                     STATUS_MIE, STATUS_SIE,
-  output logic                     STATUS_MXR, STATUS_SUM, STATUS_MPRV, STATUS_TW,
+  output logic                     STATUS_MXR, STATUS_SUM, STATUS_MPRV, STATUS_TW, // HS-level (mstatus/sstatus) values
+  output logic                     VSSTATUS_MXR, VSSTATUS_SUM, // vsstatus values, applied by the MMU to VS-stage translation
   output logic [1:0]               STATUS_FS,
   output var logic [7:0]           PMPCFG_ARRAY_REGW[P.PMP_ENTRIES-1:0],
   output var logic [P.PA_BITS-3:0] PMPADDR_ARRAY_REGW[P.PMP_ENTRIES-1:0],
   output logic [2:0]               FRM_REGW,
   output logic [3:0]               ENVCFG_CBE,
-  output logic                     ENVCFG_PBMTE,              // Page-based memory type enable
-  output logic                     ENVCFG_ADUE,               // HPTW A/D Update enable
+  output logic                     ENVCFG_PBMTE,              // Page-based memory type enable (HS-level and G-stage)
+  output logic                     ENVCFG_ADUE,               // HPTW A/D Update enable (HS-level and G-stage)
+  output logic                     VSENVCFG_PBMTE,            // Page-based memory type enable (VS-stage)
+  output logic                     VSENVCFG_ADUE,             // HPTW A/D Update enable (VS-stage)
   // PC logic output from privileged unit to IFU
   output logic [P.XLEN-1:0]        EPCM,                      // Exception Program counter to IFU PC logic
   output logic [P.XLEN-1:0]        TrapVectorM,               // Trap vector, to IFU PC logic
@@ -154,11 +159,11 @@ module csr import cvw::*;  #(parameter cvw_t P) (
   logic [63:0]             MENVCFG_REGW;
   logic [63:0]             HENVCFG_REGW;
   logic [P.XLEN-1:0]       SENVCFG_REGW;
-  logic [P.XLEN-1:0]       SATP_REGW_INT, VSATP_REGW, HGATP_REGW; // Internal SATP and Hypervisor ATPs
+  logic [P.XLEN-1:0]       SATP_REGW_INT;                   // Internal SATP
   logic                    ENVCFG_STCE; // supervisor timer counter enable
   logic                    TrapGVAM;
   logic                    TrapWritesVAToTvalM;
-  logic                    VSSTATUS_SUM, VSSTATUS_MXR, VSSTATUS_UBE;
+  logic                    VSSTATUS_UBE;
   logic [1:0]              VSSTATUS_FS;
   logic                    HSTATUS_VSBE;
   logic [31:0]             HCOUNTEREN_REGW;
@@ -413,12 +418,10 @@ module csr import cvw::*;  #(parameter cvw_t P) (
     assign HGATP_REGW = '0;
   end
 
-  // SATP Mux
-  if (P.H_SUPPORTED) begin: satp_mux
-      mux2 #(P.XLEN) satpmux(SATP_REGW_INT, VSATP_REGW, VirtModeW, SATP_REGW);
-  end else begin: satp_nomux
-      assign SATP_REGW = SATP_REGW_INT;
-  end
+  // The MMU and page table walker select between satp and vsatp/hgatp based on
+  // the effective virtualization mode of each access (V, or mstatus.MPV under
+  // MPRV, or HLV/HSV), so the HS-level satp is exported unmodified.
+  assign SATP_REGW = SATP_REGW_INT;
 
   // Until two-stage translation is integrated, htval trap writes stay zero.
   assign NextHtvalM = '0;
@@ -433,14 +436,13 @@ module csr import cvw::*;  #(parameter cvw_t P) (
     assign HLVHSVBareM = 1'b1;
   end
 
-  // Effective status bits for VS-mode
+  // Effective status bits for VS-mode. MXR and SUM are exported at both the HS
+  // and VS level; the MMU applies the right one to each translation stage.
+  assign STATUS_MXR = STATUS_MXR_INT;
+  assign STATUS_SUM = STATUS_SUM_INT;
   if (P.H_SUPPORTED) begin: status_vs
-    assign STATUS_MXR = VirtModeW ? VSSTATUS_MXR : STATUS_MXR_INT;
-    assign STATUS_SUM = VirtModeW ? VSSTATUS_SUM : STATUS_SUM_INT;
     assign STATUS_FS  = VirtModeW ? VSSTATUS_FS : STATUS_FS_INT;
   end else begin: status_noh
-    assign STATUS_MXR = STATUS_MXR_INT;
-    assign STATUS_SUM = STATUS_SUM_INT;
     assign STATUS_FS  = STATUS_FS_INT;
   end
 
@@ -488,7 +490,8 @@ module csr import cvw::*;  #(parameter cvw_t P) (
   end
 
   csrenv #(P) csrenv(.InstrM, .PrivilegeModeW, .VirtModeW, .MENVCFG_REGW, .HENVCFG_REGW,
-    .SENVCFG_REGW, .ENVCFG_CBE, .ENVCFG_STCE, .ENVCFG_PBMTE, .ENVCFG_ADUE, .VirtualCMOInstrM);
+    .SENVCFG_REGW, .ENVCFG_CBE, .ENVCFG_STCE, .ENVCFG_PBMTE, .ENVCFG_ADUE, .VSENVCFG_PBMTE, .VSENVCFG_ADUE,
+    .VirtualCMOInstrM);
 
   // merge CSR Reads
   assign CSRReadValM = CSRUReadValM | CSRSReadValM | CSRMReadValM | CSRCReadValM | CSRHReadValM;

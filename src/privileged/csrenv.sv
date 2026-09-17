@@ -34,16 +34,23 @@ module csrenv import cvw::*;  #(parameter cvw_t P) (
   input  logic [P.XLEN-1:0] SENVCFG_REGW,
   output logic [3:0]        ENVCFG_CBE,
   output logic              ENVCFG_STCE,
-  output logic              ENVCFG_PBMTE,
-  output logic              ENVCFG_ADUE,
+  output logic              ENVCFG_PBMTE,              // Svpbmt enable for HS-level and G-stage translation (menvcfg.PBMTE)
+  output logic              ENVCFG_ADUE,               // A/D update enable for HS-level and G-stage translation (menvcfg.ADUE)
+  output logic              VSENVCFG_PBMTE,            // Svpbmt enable for VS-stage translation (menvcfg & henvcfg)
+  output logic              VSENVCFG_ADUE,             // A/D update enable for VS-stage translation (menvcfg & henvcfg)
   output logic              VirtualCMOInstrM
 );
 
   // Effective envcfg controls broadcast to IEU/MMU. Machine envcfg gates all
   // lower modes; henvcfg additionally gates VS/VU behavior when V=1.
+  // The MMU chooses between the HS-level (menvcfg) and VS-level (menvcfg & henvcfg)
+  // translation controls itself, based on the effective V of each access, because
+  // G-stage translation always uses the menvcfg controls even when V=1.
   assign ENVCFG_STCE =  (P.H_SUPPORTED & VirtModeW) ? (HENVCFG_REGW[63] & MENVCFG_REGW[63]) : MENVCFG_REGW[63];
-  assign ENVCFG_PBMTE = (P.H_SUPPORTED & VirtModeW) ? (HENVCFG_REGW[62] & MENVCFG_REGW[62]) : MENVCFG_REGW[62];
-  assign ENVCFG_ADUE  = (P.H_SUPPORTED & VirtModeW) ? (HENVCFG_REGW[61] & MENVCFG_REGW[61]) : MENVCFG_REGW[61];
+  assign ENVCFG_PBMTE = MENVCFG_REGW[62];
+  assign ENVCFG_ADUE  = MENVCFG_REGW[61];
+  assign VSENVCFG_PBMTE = P.H_SUPPORTED & HENVCFG_REGW[62] & MENVCFG_REGW[62];
+  assign VSENVCFG_ADUE  = P.H_SUPPORTED & HENVCFG_REGW[61] & MENVCFG_REGW[61];
 
   if (P.H_SUPPORTED) begin: envcfg_h
     logic [3:0] MENVCFG_CBEM, HENVCFG_CBEM, SENVCFG_CBEM;

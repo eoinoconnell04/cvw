@@ -84,11 +84,18 @@ module lsu import cvw::*;  #(parameter cvw_t P) (
   output logic [P.XLEN/8-1:0]     LSUHWSTRB,                            // Bus byte write enables from LSU to EBU
   // page table walker
   input  logic [P.XLEN-1:0]       SATP_REGW,                            // SATP (supervisor address translation and protection) CSR
+  input  logic [P.XLEN-1:0]       VSATP_REGW,                           // VSATP CSR: VS-stage translation
+  input  logic [P.XLEN-1:0]       HGATP_REGW,                           // HGATP CSR: G-stage translation
+  input  logic                    VirtModeW,                            // Current virtualization mode
+  input  logic                    MSTATUS_MPV,                          // Effective V for data accesses when mstatus.MPRV=1
   input  logic                    STATUS_MXR, STATUS_SUM, STATUS_MPRV,  // STATUS CSR bits: make executable readable, supervisor user memory, machine privilege
   input  logic [1:0]              STATUS_MPP,                           // Machine previous privilege mode
+  input  logic                    VSSTATUS_MXR, VSSTATUS_SUM,           // vsstatus bits for VS-stage translation
   input  logic                    HSTATUS_SPVP,                         // HLV/HLVX/HSV effective privilege: 0=VU, 1=VS
-  input  logic                    ENVCFG_PBMTE,                         // Page-based memory types enabled
-  input  logic                    ENVCFG_ADUE,                          // HPTW A/D Update enable
+  input  logic                    ENVCFG_PBMTE,                         // Page-based memory types enabled (HS level and G-stage)
+  input  logic                    ENVCFG_ADUE,                          // HPTW A/D Update enable (HS level and G-stage)
+  input  logic                    VSENVCFG_PBMTE,                       // Page-based memory types enabled (VS-stage)
+  input  logic                    VSENVCFG_ADUE,                        // HPTW A/D Update enable (VS-stage)
   input  logic [P.XLEN-1:0]       PCSpillF,                             // Fetch PC
   input  logic                    ITLBMissOrUpdateAF,                   // ITLB miss causes HPTW (hardware pagetable walker) walk or update access bit
   output logic [P.XLEN-1:0]       PTE,                                  // Page table entry write to ITLB
@@ -206,8 +213,9 @@ module lsu import cvw::*;  #(parameter cvw_t P) (
   if(P.VIRTMEM_SUPPORTED) begin : hptw
     hptw #(P) hptw(.clk, .reset, .MemRWM(GatedMemRWM), .AtomicM, .ITLBMissOrUpdateAF, .ITLBWriteF,
       .DTLBMissOrUpdateDAM, .DTLBWriteM,
-      .FlushW, .DCacheBusStallM, .SATP_REGW, .PCSpillF,
-      .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .ENVCFG_ADUE, .PrivilegeModeW,
+      .FlushW, .DCacheBusStallM, .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .VirtModeW, .MSTATUS_MPV, .PCSpillF,
+      .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .VSSTATUS_MXR, .VSSTATUS_SUM, .HSTATUS_SPVP, .HLVHSVLegalM,
+      .ENVCFG_ADUE, .VSENVCFG_ADUE, .PrivilegeModeW,
       .ReadDataM(ReadDataM[P.XLEN-1:0]), // ReadDataM is LLEN, but HPTW only needs XLEN
       .WriteDataM(WriteDataZM), .Funct3M, .LSUFunct3M, .Funct7M, .LSUFunct7M,
       .IEUAdrExtM, .PTE, .IHWriteDataM, .PageType, .PreLSURWM, .LSUAtomicM,
@@ -250,17 +258,14 @@ module lsu import cvw::*;  #(parameter cvw_t P) (
     logic WriteAccessM;
     logic DataUpdateDAM;                                  // DTLB hit needs to update dirty or access bits
 
-    // norm:hlsv_trans requires two-stage translation for HLV/HLVX/HSV. This
-    // first path only supports VSATP/HGATP Bare/Bare; privdec traps non-Bare
-    // cases so the LSU never silently applies HS-stage translation here.
-    if (P.H_SUPPORTED) begin: hlsv_disabletranslation
-      assign DisableTranslation = SelHPTW | FlushDCacheM | HLVHSVLegalM;
-    end else begin: nohlsv_disabletranslation
-      assign DisableTranslation = SelHPTW | FlushDCacheM;
-    end
+    // HLV/HLVX/HSV translate through vsatp/hgatp as if V=1 (norm:hlsv_trans);
+    // the MMU selects those registers itself when HLVHSVLegalM is set.
+    assign DisableTranslation = SelHPTW | FlushDCacheM;
     assign WriteAccessM = PreLSURWM[0];
     mmu #(.P(P), .TLB_ENTRIES(P.DTLB_ENTRIES), .IMMU(0))
-    dmmu(.clk, .reset, .SATP_REGW, .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .HSTATUS_SPVP, .HLVHSVLegalM, .ENVCFG_PBMTE, .ENVCFG_ADUE,
+    dmmu(.clk, .reset, .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .VirtModeW, .MSTATUS_MPV,
+      .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .VSSTATUS_MXR, .VSSTATUS_SUM, .HSTATUS_SPVP, .HLVHSVLegalM,
+      .ENVCFG_PBMTE, .ENVCFG_ADUE, .VSENVCFG_PBMTE, .VSENVCFG_ADUE,
       .PrivilegeModeW, .DisableTranslation, .VAdr(IHAdrM), .Size(LSUFunct3M[1:0]),
       .PTE, .PageTypeWriteVal(PageType), .TLBWrite(DTLBWriteM), .TLBFlush(sfencevmaM),
       .PhysicalAddress(PAdrM), .TLBMiss(DTLBMissM), .Cacheable(CacheableM), .Idempotent(), .SelTIM(SelDTIM),

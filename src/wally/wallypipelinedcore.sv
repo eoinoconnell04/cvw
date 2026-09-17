@@ -110,8 +110,11 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
   // memory management unit signals
   logic                          ITLBWriteF;
   logic                          ITLBMissOrUpdateAF;
-  logic [P.XLEN-1:0]             SATP_REGW;
+  logic [P.XLEN-1:0]             SATP_REGW, VSATP_REGW, HGATP_REGW;
   logic                          STATUS_MXR, STATUS_SUM, STATUS_MPRV;
+  logic                          VSSTATUS_MXR, VSSTATUS_SUM;
+  logic                          VirtModeW, MSTATUS_MPV;
+  logic                          VSENVCFG_PBMTE, VSENVCFG_ADUE;
   logic [1:0]                    STATUS_MPP, STATUS_FS;
   logic [1:0]                    PrivilegeModeW;
   logic [P.XLEN-1:0]             PTE;
@@ -193,8 +196,10 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
     // Faults out
     .IllegalBaseInstrD, .IllegalFPUInstrD, .InstrPageFaultF, .IllegalIEUFPUInstrD, .InstrMisalignedFaultM,
     // mmu management
-    .PrivilegeModeW, .PTE, .PageType, .SATP_REGW, .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV,
-    .STATUS_MPP, .ENVCFG_PBMTE, .ENVCFG_ADUE, .ITLBWriteF, .sfencevmaM, .ITLBMissOrUpdateAF,
+    .PrivilegeModeW, .VirtModeW, .PTE, .PageType, .SATP_REGW, .VSATP_REGW, .HGATP_REGW,
+    .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .VSSTATUS_MXR, .VSSTATUS_SUM,
+    .STATUS_MPP, .ENVCFG_PBMTE, .ENVCFG_ADUE, .VSENVCFG_PBMTE, .VSENVCFG_ADUE,
+    .ITLBWriteF, .sfencevmaM, .ITLBMissOrUpdateAF,
     // pmp/pma (inside mmu) signals.
     .PMPCFG_ARRAY_REGW,  .PMPADDR_ARRAY_REGW, .InstrAccessFaultF);
 
@@ -239,13 +244,21 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
     .PMPADDR_ARRAY_REGW,          // connects to csr
     // hptw keep i/o
     .SATP_REGW,                   // from csr
+    .VSATP_REGW,                  // from csr
+    .HGATP_REGW,                  // from csr
+    .VirtModeW,                   // from csr
+    .MSTATUS_MPV,                 // from csr
     .STATUS_MXR,                  // from csr
     .STATUS_SUM,                  // from csr
     .STATUS_MPRV,                 // from csr
     .STATUS_MPP,                  // from csr
+    .VSSTATUS_MXR,                // from csr
+    .VSSTATUS_SUM,                // from csr
     .HSTATUS_SPVP,                // from csr
     .ENVCFG_PBMTE,                // from csr
     .ENVCFG_ADUE,                 // from csr
+    .VSENVCFG_PBMTE,              // from csr
+    .VSENVCFG_ADUE,               // from csr
     .sfencevmaM,                  // connects to privilege
     .DCacheStallM,                // connects to privilege
     .IEUAdrxTvalM,                // connects to privilege
@@ -308,16 +321,18 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
       .MTimerInt, .MExtInt, .SExtInt, .MSwInt,
       .MTIME_CLINT, .HGEIPIn, .IEUAdrxTvalM, .SetFflagsM,
       .InstrAccessFaultF, .HPTWInstrAccessFaultF, .HPTWInstrPageFaultF, .LoadAccessFaultM, .StoreAmoAccessFaultM, .SelHPTW,
-      .PrivilegeModeW, .SATP_REGW,
-      .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .STATUS_FS,
+      .PrivilegeModeW, .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .VirtModeW, .MSTATUS_MPV,
+      .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .VSSTATUS_MXR, .VSSTATUS_SUM, .STATUS_MPP, .STATUS_FS,
       .HSTATUS_SPVP, .HLVHSVLegalM,
       .PMPCFG_ARRAY_REGW, .PMPADDR_ARRAY_REGW,
-      .FRM_REGW, .ENVCFG_CBE, .ENVCFG_PBMTE, .ENVCFG_ADUE, .wfiM, .IntPendingM, .BigEndianM);
+      .FRM_REGW, .ENVCFG_CBE, .ENVCFG_PBMTE, .ENVCFG_ADUE, .VSENVCFG_PBMTE, .VSENVCFG_ADUE,
+      .wfiM, .IntPendingM, .BigEndianM);
   end else begin
     assign {CSRReadValW, PrivilegeModeW,
-            SATP_REGW, STATUS_MXR, STATUS_SUM, STATUS_MPRV, STATUS_MPP, STATUS_FS, FRM_REGW,
+            SATP_REGW, VSATP_REGW, HGATP_REGW, VirtModeW, MSTATUS_MPV,
+            STATUS_MXR, STATUS_SUM, STATUS_MPRV, VSSTATUS_MXR, VSSTATUS_SUM, STATUS_MPP, STATUS_FS, FRM_REGW,
             // PMPCFG_ARRAY_REGW, PMPADDR_ARRAY_REGW,
-            ENVCFG_CBE, ENVCFG_PBMTE, ENVCFG_ADUE,
+            ENVCFG_CBE, ENVCFG_PBMTE, ENVCFG_ADUE, VSENVCFG_PBMTE, VSENVCFG_ADUE,
             EPCM, TrapVectorM, RetM, TrapM,
             sfencevmaM, HSTATUS_SPVP, HLVHSVLegalM, BigEndianM, wfiM, IntPendingM} = '0;
   end

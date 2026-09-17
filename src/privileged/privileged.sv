@@ -81,16 +81,23 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
   // CSR outputs
   output logic [P.XLEN-1:0] CSRReadValW,                                    // Value read from CSR
   output logic [1:0]        PrivilegeModeW,                                 // current privilege mode
-  output logic [P.XLEN-1:0] SATP_REGW,                                      // supervisor address translation register
-  output logic              STATUS_MXR, STATUS_SUM, STATUS_MPRV,            // status register bits
+  output logic [P.XLEN-1:0] SATP_REGW,                                      // HS-level supervisor address translation register
+  output logic [P.XLEN-1:0] VSATP_REGW,                                     // VS-stage address translation register
+  output logic [P.XLEN-1:0] HGATP_REGW,                                     // G-stage address translation register
+  output logic              VirtModeW,                                      // current virtualization mode V
+  output logic              MSTATUS_MPV,                                    // mstatus.MPV: effective V for data accesses under MPRV
+  output logic              STATUS_MXR, STATUS_SUM, STATUS_MPRV,            // status register bits (HS level)
+  output logic              VSSTATUS_MXR, VSSTATUS_SUM,                     // vsstatus bits applied to VS-stage translation
   output logic [1:0]        STATUS_MPP, STATUS_FS,                          // status register bits
   output logic              HSTATUS_SPVP,                                   // HLV/HLVX/HSV effective privilege
   output var logic [7:0]    PMPCFG_ARRAY_REGW[P.PMP_ENTRIES-1:0],           // PMP configuration entries to MMU
   output var logic [P.PA_BITS-3:0] PMPADDR_ARRAY_REGW [P.PMP_ENTRIES-1:0],  // PMP address entries to MMU
   output logic [2:0]        FRM_REGW,                                       // FPU rounding mode
   output logic [3:0]        ENVCFG_CBE,                                     // Cache block operation enables
-  output logic              ENVCFG_PBMTE,                                   // Page-based memory type enable
-  output logic              ENVCFG_ADUE,                                    // HPTW A/D Update enable
+  output logic              ENVCFG_PBMTE,                                   // Page-based memory type enable (HS level and G-stage)
+  output logic              ENVCFG_ADUE,                                    // HPTW A/D Update enable (HS level and G-stage)
+  output logic              VSENVCFG_PBMTE,                                 // Page-based memory type enable (VS-stage)
+  output logic              VSENVCFG_ADUE,                                  // HPTW A/D Update enable (VS-stage)
   // PC logic output from privileged unit to IFU
   output logic [P.XLEN-1:0] EPCM,                                           // Exception Program counter to IFU PC logic
   output logic [P.XLEN-1:0] TrapVectorM,                                    // Trap vector, to IFU PC logic
@@ -133,8 +140,6 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
   logic                     wfiW;
 
     // --- Hypervisor ---
-  logic                     VirtModeW;       // current V (from privmode)
-  logic                     MSTATUS_MPV;     // from CSR (prev V for MRET)
   logic                     HSTATUS_SPV;     // from CSR (prev V for SRET in HS)
   logic                     HSTATUS_VTSR, HSTATUS_VTW, HSTATUS_VTVM, HSTATUS_HU;
   logic                     HLVHSVBareM;     // VSATP/HGATP both Bare for initial HLV/HSV path
@@ -168,10 +173,11 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
     .NextPrivilegeModeM, .PrivilegeModeW, .VirtModeW, .HLVHSVLegalM, .CauseM, .SelHPTW,
     .STATUS_MPP, .MSTATUS_MPV, .STATUS_SPP, .STATUS_TSR, .STATUS_TVM,
     .STATUS_MIE, .STATUS_SIE, .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_TW, .STATUS_FS,
+    .VSSTATUS_MXR, .VSSTATUS_SUM,
     .HSTATUS_SPV, .HSTATUS_SPVP, .HSTATUS_VTSR, .HSTATUS_VTW, .HSTATUS_VTVM, .HSTATUS_HU, .VSSTATUS_SPP, .VSSTATUS_SIE,
     .MEDELEG_REGW, .HEDELEG_REGW, .HIDELEG_REGW, .HIE_REGW, .HGEIE_REGW, .MIP_REGW, .MIE_REGW, .MIDELEG_REGW,
-    .SATP_REGW, .PMPCFG_ARRAY_REGW, .PMPADDR_ARRAY_REGW,
-    .SetFflagsM, .FRM_REGW, .ENVCFG_CBE, .ENVCFG_PBMTE, .ENVCFG_ADUE,
+    .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .PMPCFG_ARRAY_REGW, .PMPADDR_ARRAY_REGW,
+    .SetFflagsM, .FRM_REGW, .ENVCFG_CBE, .ENVCFG_PBMTE, .ENVCFG_ADUE, .VSENVCFG_PBMTE, .VSENVCFG_ADUE,
     .EPCM, .TrapVectorM,
     .CSRReadValW, .IllegalCSRAccessM, .VirtualCSRAccessM, .VirtualCMOInstrM, .HLVHSVBareM, .BigEndianM);
 

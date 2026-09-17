@@ -35,14 +35,22 @@
 
 module hptw import cvw::*;  #(parameter cvw_t P) (
   input  logic              clk, reset,
-  input  logic [P.XLEN-1:0] SATP_REGW,              // includes SATP.MODE to determine number of levels in page table
+  input  logic [P.XLEN-1:0] SATP_REGW,              // HS-level satp: includes SATP.MODE to determine number of levels in page table
+  input  logic [P.XLEN-1:0] VSATP_REGW,             // vsatp: VS-stage translation for virtualized walks
+  input  logic [P.XLEN-1:0] HGATP_REGW,             // hgatp: G-stage translation for virtualized walks
+  input  logic              VirtModeW,              // current virtualization mode V
+  input  logic              MSTATUS_MPV,            // effective V for data accesses when mstatus.MPRV=1
   input  logic [P.XLEN-1:0] PCSpillF,               // addresses to translate
   input  logic [P.XLEN+1:0] IEUAdrExtM,             // addresses to translate
   input  logic [1:0]        MemRWM, AtomicM,
   // system status
   input  logic              STATUS_MXR, STATUS_SUM, STATUS_MPRV,
   input  logic [1:0]        STATUS_MPP,
-  input  logic              ENVCFG_ADUE,            // HPTW A/D Update enable
+  input  logic              VSSTATUS_MXR, VSSTATUS_SUM, // vsstatus bits applied to VS-stage translation
+  input  logic              HSTATUS_SPVP,           // HLV/HLVX/HSV effective privilege: 0=VU, 1=VS
+  input  logic              HLVHSVLegalM,           // HLV/HLVX/HSV access in Memory stage: translate as if V=1
+  input  logic              ENVCFG_ADUE,            // HPTW A/D Update enable (HS level and G-stage)
+  input  logic              VSENVCFG_ADUE,          // HPTW A/D Update enable (VS-stage)
   input  logic [1:0]        PrivilegeModeW,
   input  logic [P.XLEN-1:0] ReadDataM,              // page table entry from LSU
   input  logic [P.XLEN-1:0] WriteDataM,
@@ -113,6 +121,12 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
   logic                     DAUFaultM;
   logic                     PBMTOrDAUFaultM;
   logic                     HPTWFaultM;
+  logic                     StartWalkVirt;          // walk about to start from IDLE is virtualized (uses vsatp/hgatp)
+  logic                     WalkVirt;               // walk in progress is virtualized (registered at walk start)
+  logic [P.XLEN-1:0]        EffSATP;                // stage-1 address translation register for this walk
+  logic [P.SVMODE_BITS-1:0] StartSvMode;            // stage-1 mode of the walk about to start
+  logic                     EffMXR, EffSUM, EffADUE; // status/envcfg controls applied to stage-1 translation
+  statetype                 StartInitialWalkerState; // first state of the walk about to start
 
   // map hptw access faults onto either the original LSU load/store fault or instruction access fault
   assign LSUAccessFaultM         = LSULoadAccessFaultM | LSUStoreAmoAccessFaultM;
@@ -140,9 +154,34 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
   assign StoreAmoPageFaultM    = TakeHPTWFault ? HPTWStoreAmoPageFaultDelay : LSUStoreAmoPageFaultM;
   assign HPTWInstrPageFaultF   = TakeHPTWFault ? HPTWInstrPageFaultDelay : 1'b0;
 
+  // Effective translation controls for this walk. Data walks are virtualized when V=1,
+  // when mstatus.MPRV=1 with MPV=1, or for HLV/HLVX/HSV; instruction walks follow V.
+  // The decision is registered at walk start (like DTLBWalk) so that the walker's
+  // address does not depend combinationally on the DTLB miss that starts the walk;
+  // the combinational StartWalkVirt is used only to pick the first walker state.
+  if (P.H_SUPPORTED) begin: effvirt
+    logic DataVirt;
+    assign DataVirt = HLVHSVLegalM | (STATUS_MPRV ? MSTATUS_MPV : VirtModeW);
+    assign StartWalkVirt = DTLBMissOrUpdateDAM ? DataVirt : VirtModeW;
+    flopenr #(1) WalkVirtReg(clk, reset, StartWalk, StartWalkVirt, WalkVirt);
+    assign EffSATP  = WalkVirt ? VSATP_REGW : SATP_REGW;
+    assign StartSvMode = StartWalkVirt ? VSATP_REGW[P.XLEN-1:P.XLEN-P.SVMODE_BITS] : SATP_REGW[P.XLEN-1:P.XLEN-P.SVMODE_BITS];
+    assign EffMXR   = WalkVirt ? (VSSTATUS_MXR | STATUS_MXR) : STATUS_MXR; // HS-level MXR applies to both stages
+    assign EffSUM   = WalkVirt ? VSSTATUS_SUM : STATUS_SUM;
+    assign EffADUE  = WalkVirt ? VSENVCFG_ADUE : ENVCFG_ADUE;
+  end else begin: effvirt_noh
+    assign StartWalkVirt = 1'b0;
+    assign WalkVirt = 1'b0;
+    assign EffSATP  = SATP_REGW;
+    assign StartSvMode = SATP_REGW[P.XLEN-1:P.XLEN-P.SVMODE_BITS];
+    assign EffMXR   = STATUS_MXR;
+    assign EffSUM   = STATUS_SUM;
+    assign EffADUE  = ENVCFG_ADUE;
+  end
+
   // Extract bits from CSRs and inputs
-  assign SvMode = SATP_REGW[P.XLEN-1:P.XLEN-P.SVMODE_BITS];
-  assign BasePageTablePPN = SATP_REGW[P.PPN_BITS-1:0];
+  assign SvMode = EffSATP[P.XLEN-1:P.XLEN-P.SVMODE_BITS];
+  assign BasePageTablePPN = EffSATP[P.PPN_BITS-1:0];
   assign TLBMissOrUpdateDA = DTLBMissOrUpdateDAM | ITLBMissOrUpdateAF;
 
   // Determine which address to translate
@@ -192,16 +231,22 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
     assign SetDirty = ~Dirty & DTLBWalk & (WriteAccess | CMOpM[3]);
     assign ReadAccess = MemRWM[1];
 
-    assign EffectivePrivilegeMode = DTLBWalk ? (STATUS_MPRV ? STATUS_MPP : PrivilegeModeW) : PrivilegeModeW; // DTLB uses MPP mode when MPRV is 1
+    // DTLB walks use MPP mode when MPRV is 1, and hstatus.SPVP for HLV/HLVX/HSV
+    if (P.H_SUPPORTED) begin: effpriv_h
+      assign EffectivePrivilegeMode = (DTLBWalk & HLVHSVLegalM) ? {1'b0, HSTATUS_SPVP} :
+                                      DTLBWalk ? (STATUS_MPRV ? STATUS_MPP : PrivilegeModeW) : PrivilegeModeW;
+    end else begin: effpriv_noh
+      assign EffectivePrivilegeMode = DTLBWalk ? (STATUS_MPRV ? STATUS_MPP : PrivilegeModeW) : PrivilegeModeW;
+    end
     assign ImproperPrivilege = ((EffectivePrivilegeMode == P.U_MODE) & ~PTE_U) |
-                               ((EffectivePrivilegeMode == P.S_MODE) & PTE_U & (~STATUS_SUM & DTLBWalk));
+                               ((EffectivePrivilegeMode == P.S_MODE) & PTE_U & (~EffSUM & DTLBWalk));
 
     // Check for page faults
-    vm64check #(P) vm64check(.SATP_MODE(SATP_REGW[P.XLEN-1:P.XLEN-P.SVMODE_BITS]), .VAdr(TranslationVAdr),
+    vm64check #(P) vm64check(.SATP_MODE(EffSATP[P.XLEN-1:P.XLEN-P.SVMODE_BITS]), .VAdr(TranslationVAdr),
       .SV39Mode(), .SV48Mode(), .UpperBitsUnequal);
     // This register is not functionally necessary, but improves the critical path.
     flopr #(1) upperbitsunequalreg(clk, reset, UpperBitsUnequal, UpperBitsUnequalD);
-    assign InvalidRead = ReadAccess & ~Readable & (~STATUS_MXR | ~Executable);
+    assign InvalidRead = ReadAccess & ~Readable & (~EffMXR | ~Executable);
     assign InvalidWrite = WriteAccess & ~Writable;
     assign InvalidOp = DTLBWalk ? (InvalidRead | InvalidWrite) : ~Executable;
     assign OtherPageFault = ImproperPrivilege | InvalidOp | UpperBitsUnequalD | Misaligned | ~Valid;
@@ -210,7 +255,7 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
     // memory access.  If there is the PTE needs to be updated setting Access
     // and possibly also Dirty.  Dirty is set if the operation is a store/amo.
     // However any other fault should not cause the update, and updates are in software when ENVCFG_ADUE = 0
-    assign HPTWUpdateDA = ValidLeafPTE & (~Accessed | SetDirty) & ENVCFG_ADUE & ~OtherPageFault;
+    assign HPTWUpdateDA = ValidLeafPTE & (~Accessed | SetDirty) & EffADUE & ~OtherPageFault;
 
     assign HPTWRW[0] = (WalkerState == UPDATE_PTE);           // HPTWRW[0] will always be 0 if ADUE = 0 because HPTWUpdateDA will be 0 so WalkerState never is UPDATE_PTE
     assign UpdatePTE = (WalkerState == LEAF) & HPTWUpdateDA;  // UpdatePTE will always be 0 if ADUE = 0 because HPTWUpdateDA will be 0
@@ -273,6 +318,7 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
   // Initial state and misalignment for RV32/64
   if (P.XLEN == 32) begin
     assign InitialWalkerState = L1_ADR;
+    assign StartInitialWalkerState = L1_ADR;
     assign MegapageMisaligned = |(CurrentPPN[9:0]); // must have zero PPN0
     assign Misaligned = ((WalkerState == L0_ADR) & MegapageMisaligned);
   end else begin
@@ -280,6 +326,9 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
     assign InitialWalkerState = (P.SV57_SUPPORTED & SvMode == P.SV57) ? L4_ADR :
                                 (P.SV48_SUPPORTED & SvMode == P.SV48) ? L3_ADR :
                                                                         L2_ADR ;
+    assign StartInitialWalkerState = (P.SV57_SUPPORTED & StartSvMode == P.SV57) ? L4_ADR :
+                                     (P.SV48_SUPPORTED & StartSvMode == P.SV48) ? L3_ADR :
+                                                                                  L2_ADR ;
     assign PetapageMisaligned = P.SV57_SUPPORTED & |(CurrentPPN[35:0]); // Must have zero PPN3, PPN2, PPN1, PPN0
     assign TerapageMisaligned = P.SV48_SUPPORTED & |(CurrentPPN[26:0]); // Must have zero PPN2, PPN1, PPN0
     assign GigapageMisaligned =                    |(CurrentPPN[17:0]); // Must have zero PPN1 and PPN0
@@ -294,7 +343,7 @@ module hptw import cvw::*;  #(parameter cvw_t P) (
   flopenl #(.TYPE(statetype)) WalkerStateReg(clk, reset | FlushW, 1'b1, NextWalkerState, IDLE, WalkerState);
   always_comb
     case (WalkerState)
-      IDLE:       if (TLBMissOrUpdateDA)                              NextWalkerState = InitialWalkerState;
+      IDLE:       if (TLBMissOrUpdateDA)                              NextWalkerState = StartInitialWalkerState;
                   else                                                NextWalkerState = IDLE;
       L4_ADR:                                                         NextWalkerState = L4_RD; // First access in SV57
       L4_RD:      if (HPTWFaultM)                                     NextWalkerState = FAULT;

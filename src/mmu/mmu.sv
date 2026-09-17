@@ -31,14 +31,22 @@ module mmu import cvw::*;  #(parameter cvw_t P,
                              parameter TLB_ENTRIES = 8, IMMU = 0) (
   input  logic                 clk, reset,
   input  logic [P.XLEN-1:0]    SATP_REGW,          // Current value of satp CSR (from privileged unit)
-  input  logic                 STATUS_MXR,         // Status CSR: make executable page readable
-  input  logic                 STATUS_SUM,         // Status CSR: Supervisor access to user memory
+  input  logic [P.XLEN-1:0]    VSATP_REGW,         // Current value of vsatp CSR: VS-stage translation
+  input  logic [P.XLEN-1:0]    HGATP_REGW,         // Current value of hgatp CSR: G-stage translation
+  input  logic                 VirtModeW,          // Current virtualization mode V
+  input  logic                 MSTATUS_MPV,        // Effective V for data accesses when mstatus.MPRV=1
+  input  logic                 STATUS_MXR,         // Status CSR: make executable page readable (HS level)
+  input  logic                 STATUS_SUM,         // Status CSR: Supervisor access to user memory (HS level)
   input  logic                 STATUS_MPRV,        // Status CSR: modify machine privilege
   input  logic [1:0]           STATUS_MPP,         // Status CSR: previous machine privilege level
+  input  logic                 VSSTATUS_MXR,       // vsstatus.MXR: applies to VS-stage translation
+  input  logic                 VSSTATUS_SUM,       // vsstatus.SUM: applies to VS-stage translation
   input  logic                 HSTATUS_SPVP,       // HLV/HLVX/HSV effective privilege: 0=VU, 1=VS
-  input  logic                 HLVHSVLegalM,       // HLV/HLVX/HSV memory access in Bare/Bare path
-  input  logic                 ENVCFG_PBMTE,       // Page-based memory types enabled
-  input  logic                 ENVCFG_ADUE,        // HPTW A/D Update enable
+  input  logic                 HLVHSVLegalM,       // HLV/HLVX/HSV memory access: translate as if V=1
+  input  logic                 ENVCFG_PBMTE,       // Page-based memory types enabled (HS level and G-stage)
+  input  logic                 ENVCFG_ADUE,        // HPTW A/D Update enable (HS level and G-stage)
+  input  logic                 VSENVCFG_PBMTE,     // Page-based memory types enabled (VS-stage)
+  input  logic                 VSENVCFG_ADUE,      // HPTW A/D Update enable (VS-stage)
   input  logic [1:0]           PrivilegeModeW,     // Current privilege level of the processeor
   input  logic                 DisableTranslation, // virtual address translation disabled during D$ flush and HPTW walk that use physical addresses
   input  logic [P.XLEN+1:0]    VAdr,               // virtual/physical address from IEU or physical address from HPTW
@@ -79,6 +87,36 @@ module mmu import cvw::*;  #(parameter cvw_t P,
   logic                        AtomicMisalignedCausesAccessFaultM; // Misaligned atomics are not handled by hardware even with ZICCLSM, so it throws an access fault instead of misaligned with ZICCLSM
   logic [1:0]                  EffectivePrivilegeModeW;  // Effective privilege mode accounting for MPRV
   logic                        MisalignedAllowedM;       // System can throw misaligned if ZICCLSM is not supported, or access is uncachable and TLB has found the entry.
+  logic                        EffVirtModeW;             // Effective virtualization mode of this access
+  logic [P.XLEN-1:0]           EffSATP;                  // Stage-1 address translation register: satp, or vsatp when virtualized
+  logic                        EffMXR, EffSUM;           // Status bits applied to stage-1 translation
+  logic                        EffPBMTE, EffADUE;        // envcfg controls applied to stage-1 translation
+
+  // Effective virtualization mode and stage-1 translation controls.
+  // Instruction fetches are virtualized exactly when V=1. Data accesses are virtualized
+  // when V=1, or when mstatus.MPRV=1 and mstatus.MPV=1, or for HLV/HLVX/HSV (which
+  // translate as if V=1 regardless of the current V).
+  // When virtualized, stage-1 translation uses vsatp and vsstatus.SUM. The HS-level
+  // sstatus.MXR applies to both translation stages, so VS-stage uses the OR of both MXR bits.
+  if (P.H_SUPPORTED) begin: effvirt
+    if (IMMU) begin: effvirt_immu
+      assign EffVirtModeW = VirtModeW;
+    end else begin: effvirt_dmmu
+      assign EffVirtModeW = HLVHSVLegalM | (STATUS_MPRV ? MSTATUS_MPV : VirtModeW);
+    end
+    assign EffSATP  = EffVirtModeW ? VSATP_REGW : SATP_REGW;
+    assign EffMXR   = EffVirtModeW ? (VSSTATUS_MXR | STATUS_MXR) : STATUS_MXR;
+    assign EffSUM   = EffVirtModeW ? VSSTATUS_SUM : STATUS_SUM;
+    assign EffPBMTE = EffVirtModeW ? VSENVCFG_PBMTE : ENVCFG_PBMTE;
+    assign EffADUE  = EffVirtModeW ? VSENVCFG_ADUE : ENVCFG_ADUE;
+  end else begin: effvirt_noh
+    assign EffVirtModeW = 1'b0;
+    assign EffSATP  = SATP_REGW;
+    assign EffMXR   = STATUS_MXR;
+    assign EffSUM   = STATUS_SUM;
+    assign EffPBMTE = ENVCFG_PBMTE;
+    assign EffADUE  = ENVCFG_ADUE;
+  end
 
   // Get Effective Privilege Mode
   // for DLB, when mstatus.MPRV=1, use mstatus.MPP rather than the current privilege mode
@@ -100,9 +138,10 @@ module mmu import cvw::*;  #(parameter cvw_t P,
     assign WriteAccess = WriteAccessM;
     tlb #(.P(P), .TLB_ENTRIES(TLB_ENTRIES), .ITLB(IMMU)) tlb(
           .clk, .reset,
-          .SATP_MODE(SATP_REGW[P.XLEN-1:P.XLEN-P.SVMODE_BITS]),
-          .SATP_ASID(SATP_REGW[P.ASID_BASE+P.ASID_BITS-1:P.ASID_BASE]),
-          .VAdr(VAdr[P.XLEN-1:0]), .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .ENVCFG_PBMTE, .ENVCFG_ADUE,
+          .SATP_MODE(EffSATP[P.XLEN-1:P.XLEN-P.SVMODE_BITS]),
+          .SATP_ASID(EffSATP[P.ASID_BASE+P.ASID_BITS-1:P.ASID_BASE]),
+          .VAdr(VAdr[P.XLEN-1:0]), .STATUS_MXR(EffMXR), .STATUS_SUM(EffSUM), .STATUS_MPRV, .STATUS_MPP,
+          .ENVCFG_PBMTE(EffPBMTE), .ENVCFG_ADUE(EffADUE),
           .EffectivePrivilegeModeW, .ReadAccess, .WriteAccess, .CMOpM,
           .DisableTranslation, .PTE, .PageTypeWriteVal,
           .TLBWrite, .TLBFlush, .TLBPAdr, .TLBMiss,

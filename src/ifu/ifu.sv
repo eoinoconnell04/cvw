@@ -84,12 +84,18 @@ module ifu import cvw::*;  #(parameter cvw_t P) (
   input  logic [2:0]           PageType,                                 // Hardware page table walker (HPTW) writes PageType to ITLB
   input  logic                 ITLBWriteF,                               // Writes PTE and PageType to ITLB
   input  logic [P.XLEN-1:0]    SATP_REGW,                                // Location of the root page table and page table configuration
+  input  logic [P.XLEN-1:0]    VSATP_REGW,                               // VS-stage root page table (used when V=1)
+  input  logic [P.XLEN-1:0]    HGATP_REGW,                               // G-stage root page table (used when V=1)
+  input  logic                 VirtModeW,                                // Current virtualization mode
   input  logic                 STATUS_MXR,                               // Status CSR: make executable page readable
   input  logic                 STATUS_SUM,                               // Status CSR: Supervisor access to user memory
   input  logic                 STATUS_MPRV,                              // Status CSR: modify machine privilege
   input  logic [1:0]           STATUS_MPP,                               // Status CSR: previous machine privilege level
-  input  logic                 ENVCFG_PBMTE,                             // Page-based memory types enabled
-  input  logic                 ENVCFG_ADUE,                              // HPTW A/D Update enable
+  input  logic                 VSSTATUS_MXR, VSSTATUS_SUM,               // vsstatus bits for VS-stage translation
+  input  logic                 ENVCFG_PBMTE,                             // Page-based memory types enabled (HS level and G-stage)
+  input  logic                 ENVCFG_ADUE,                              // HPTW A/D Update enable (HS level and G-stage)
+  input  logic                 VSENVCFG_PBMTE,                           // Page-based memory types enabled (VS-stage)
+  input  logic                 VSENVCFG_ADUE,                            // HPTW A/D Update enable (VS-stage)
   input  logic                 sfencevmaM,                               // Virtual memory address fence, invalidate TLB entries
   output logic                 ITLBMissOrUpdateAF,                       // ITLB miss causes HPTW (hardware pagetable walker) walk or update access bit
   input  var logic [7:0]       PMPCFG_ARRAY_REGW[P.PMP_ENTRIES-1:0],     // PMP configuration from privileged unit
@@ -187,10 +193,11 @@ module ifu import cvw::*;  #(parameter cvw_t P) (
     assign TLBFlush = sfencevmaM & ~StallMQ;
 
     // HLV/HLVX/HSV explicit accesses are data-side only; tie off their controls for the IMMU.
-    // TODO: Full VS/VU instruction fetch needs separate two-stage VSATP/HGATP translation plumbing.
+    // Instruction fetch with V=1 uses vsatp/hgatp, selected inside the MMU from VirtModeW.
     mmu #(.P(P), .TLB_ENTRIES(P.ITLB_ENTRIES), .IMMU(1))
-    immu(.clk, .reset, .SATP_REGW, .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP,
-         .HSTATUS_SPVP(1'b0), .HLVHSVLegalM(1'b0), .ENVCFG_PBMTE, .ENVCFG_ADUE,
+    immu(.clk, .reset, .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .VirtModeW, .MSTATUS_MPV(1'b0),
+         .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .VSSTATUS_MXR, .VSSTATUS_SUM,
+         .HSTATUS_SPVP(1'b0), .HLVHSVLegalM(1'b0), .ENVCFG_PBMTE, .ENVCFG_ADUE, .VSENVCFG_PBMTE, .VSENVCFG_ADUE,
          .PrivilegeModeW, .DisableTranslation(1'b0),
          .VAdr(PCFExt),
          .Size(2'b10),
