@@ -288,3 +288,61 @@ wsim rv64gch --elf tests/coverage/hypervisorLoadStore.elf --lockstepverbose > hy
 ```
 
 </details>
+
+<details>
+<summary>hypervisorVirtLoadStore.S</summary>
+
+`hypervisorVirtLoadStore.S` is a focused test for ordinary (non-HLV/HSV)
+load/store and instruction fetch issued directly by guest code running with
+`mstatus.MPV=1` (VS-mode), with both VS-stage and G-stage translation set to
+Bare. `hypervisorLoadStore.S` covers the explicit HLV/HLVX/HSV path used by
+HS-mode to access guest memory on the guest's behalf; this test instead
+covers the ordinary LSU/IFU path taken when the guest itself issues normal
+`lb`/`lh`/`lw`/`ld`/`sb`/`sh`/`sw`/`sd` and control-flow instructions while
+`V=1`. It relies on the `satp`->`vsatp` mux in `csr.sv` falling through
+correctly to a physical-address passthrough when both stages are Bare.
+
+Setup:
+
+- Clears `satp`, `vsatp`, and `hgatp`, so ordinary, VS-stage, and G-stage
+  translation are Bare.
+- Masks `mstatus.MIE` before entering the VS-mode block and installs a
+  minimal local M-mode trap handler (`m_trap_handler_virt`) that treats any
+  trap other than the expected closing VS-mode ecall as an immediate
+  failure, rather than silently skipping it the way the shared
+  `WALLY-init-lib.h` handler does. This is deliberate: the README above
+  notes that stable VS/VU normal execution is a known limitation, so this
+  test is written to fail loudly on any unexpected trap instead of masking
+  one.
+
+What it tests:
+
+- Ordinary byte/half/word/double stores and readback loads to a single test
+  location, issued directly from VS-mode
+- Ordinary sign- and zero-extending loads (`lb`, `lbu`, `lh`, `lhu`, `lw`,
+  `lwu`, `ld`) of a preinitialized pattern from VS-mode
+- Ordinary instruction fetch across a `jal`/`ret` call while `V=1`
+- Return to M-mode via a VS-mode `ecall` (`mcause = 10`), and that the
+  guest's store is visible through an ordinary M-mode load afterward
+
+Known limitations:
+
+- Non-Bare VS-stage and G-stage translation are not covered.
+- U-mode-under-virtualization (VU-mode) is not covered; only VS-mode.
+- Interrupts are masked for the VS-mode block, so this does not cover
+  interrupt behavior during ordinary guest execution.
+
+Build:
+
+```sh
+source ./setup.sh
+make -C tests/coverage hypervisorVirtLoadStore.elf hypervisorVirtLoadStore.elf.objdump
+```
+
+Run:
+
+```sh
+wsim rv64gch --elf tests/coverage/hypervisorVirtLoadStore.elf --lockstepverbose > hypervisorVirtLoadStore.log 2>&1
+```
+
+</details>
