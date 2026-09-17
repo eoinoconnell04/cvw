@@ -6,9 +6,11 @@ The hypervisor coverage tests are targeted checks for the currently implemented
 parts of Wally's RISC-V Hypervisor extension support. They are intended to run
 on `rv64gch` against ImperasDV lockstep.
 
-These are not full H-extension architectural compliance tests. In particular,
-the checked-in tests do not yet cover non-Bare two-stage translation, full guest
-page-fault plumbing, or stable VS/VU normal execution.
+These are not full H-extension architectural compliance tests. Two-stage
+(VS-stage + G-stage) translation, guest-page faults with `htval`/`mtval2`, and
+HLV/HSV through two-stage translation are covered by `hypervisorTwoStage.S`
+(see below), but only with one-level (gigapage) tables and without ImperasDV
+lockstep, which is unavailable in this environment.
 
 <details>
 <summary>Common build and ImperasDV setup</summary>
@@ -267,9 +269,9 @@ What it tests:
 
 Known limitations:
 
-- Non-Bare VS-stage and G-stage translation are not covered.
-- Guest-page-fault behavior and guest physical address reporting through
-  `mtval2` / `htval` are not covered.
+- Non-Bare VS-stage and G-stage translation, guest-page faults, and
+  `mtval2` / `htval` reporting are covered separately by
+  `hypervisorTwoStage.S` (scenario I for HLV/HSV).
 - `htinst` / `mtinst` trap transform behavior is not covered.
 - HLVX execute-permission behavior through page tables and PMP is not covered.
 - MPRV/MPV interactions for ordinary load/store instructions are not covered.
@@ -327,7 +329,8 @@ What it tests:
 
 Known limitations:
 
-- Non-Bare VS-stage and G-stage translation are not covered.
+- Non-Bare VS-stage and G-stage translation are covered separately by
+  `hypervisorTwoStage.S`.
 - U-mode-under-virtualization (VU-mode) is not covered; only VS-mode.
 - Interrupts are masked for the VS-mode block, so this does not cover
   interrupt behavior during ordinary guest execution.
@@ -371,10 +374,43 @@ Scenarios:
 - G: jump to a GVA with no G-stage mapping: expects an instruction
   guest-page fault (20) with `mtval2` = GPA >> 2
 - H: store with no G-stage mapping: expects a store guest-page fault (23)
+- I: HLV.D/HSV.D from M-mode (`V=0`) through the scenario C tables with
+  `hstatus.SPVP=1`; an HLV of an unmapped GPA (load guest-page fault with
+  `mtval2`); and an HLV with `SPVP=0` of a supervisor page (load page fault)
 
 On failure the test writes `tohost = (code << 1) | 1`, where `code` is the
-scenario number (A=1 ... H=8), so the failing scenario can be read from the
+scenario number (A=1 ... I=9), so the failing scenario can be read from the
 testbench `tohost write` message.
+
+How two-stage translation is implemented (see the header of `src/mmu/hptw.sv`
+for the walker-level description):
+
+- `csr.sv` exports HS-level and VS-level `satp`/`vsatp`, `hgatp`,
+  `MXR`/`SUM`, and envcfg `PBMTE`/`ADUE` separately. The IMMU, DMMU, and
+  walker choose the effective virtualization mode per access: `V` for
+  fetches; `V`, `mstatus.MPV` under `MPRV`, or 1 for HLV/HLVX/HSV for data.
+- TLB entries are tagged with `{V, VMID}` in addition to `{ASID, VPN}`, so
+  guest and hypervisor translations of the same virtual address coexist.
+- The walker runs a nested G-stage walk (Sv39x4/Sv48x4/Sv57x4) for every
+  VS-stage PTE address and for the final guest physical address, and writes
+  the TLB with one merged entry (supervisor physical page, the smaller page
+  size, ANDed permissions, `A` set, `D` ANDed). A/D updates on merged
+  entries are handed back to the walker so the right stage is updated or
+  faulted.
+- G-stage faults are guest-page faults (causes 20/21/23); `tval` gets the
+  guest virtual address and `htval`/`mtval2` get the guest physical address
+  shifted right by 2. VS-stage faults are checked before the final G-stage
+  translation and remain ordinary page faults.
+
+Known limitations:
+
+- HLVX.HU/HLVX.WU are translated like ordinary HLV loads: the
+  execute-permission check that distinguishes them is not implemented.
+- `vsstatus.MXR` can relax reads of a merged entry whose G-stage page is
+  execute-only even when the HS-level `MXR` is clear.
+- With `vsatp` Bare, guest physical addresses wider than the configuration's
+  virtual address width raise a guest-page fault instead of translating.
+- `htinst`/`mtinst` are still written as zero.
 
 Notes:
 
