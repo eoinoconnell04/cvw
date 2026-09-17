@@ -346,3 +346,60 @@ wsim rv64gch --elf tests/coverage/hypervisorVirtLoadStore.elf --lockstepverbose 
 ```
 
 </details>
+
+<details>
+<summary>hypervisorTwoStage.S</summary>
+
+`hypervisorTwoStage.S` is a pass/fail test of two-stage (VS-stage + G-stage)
+address translation for ordinary guest loads, stores, and instruction fetch
+issued from VS-mode (`V=1`). Each scenario builds one-level (gigapage) page
+tables, enters VS-mode with `mret`, performs an access through a fabricated
+guest address, and returns to M-mode with an `ecall`; the M-mode handler
+then checks `mcause`, `mtval`, `mtval2`, and the data the guest read.
+
+Scenarios:
+
+- A: VS-stage Sv39, G-stage Bare (single-stage translation under `V=1`)
+- B: VS-stage Bare, G-stage Sv39x4 (G-stage only)
+- C: VS-stage Sv39 and G-stage Sv39x4 (full two-stage: VS-stage page-table
+  reads themselves go through the G-stage)
+- D: guest store through two-stage translation, verified from M-mode
+- E: load with a valid VS-stage mapping but no G-stage mapping: expects a
+  load guest-page fault (21) with `mtval` = GVA and `mtval2` = GPA >> 2
+- F: load with an invalid VS-stage PTE under two-stage translation: expects
+  an ordinary load page fault (13) with `mtval2` = 0
+- G: jump to a GVA with no G-stage mapping: expects an instruction
+  guest-page fault (20) with `mtval2` = GPA >> 2
+- H: store with no G-stage mapping: expects a store guest-page fault (23)
+
+On failure the test writes `tohost = (code << 1) | 1`, where `code` is the
+scenario number (A=1 ... H=8), so the failing scenario can be read from the
+testbench `tohost write` message.
+
+Notes:
+
+- VS-stage PTEs use `U=0` because VS-mode is a supervisor mode: an S-mode
+  fetch or (with `SUM=0`) data access to a `U=1` page is an ordinary
+  improper-privilege page fault. G-stage PTEs use `U=1` because G-stage
+  accesses are always checked as user-level accesses.
+- Every table identity-maps the gigapage holding the program (index 2) so
+  that guest instruction fetch and the VS-stage page tables themselves
+  resolve through the G-stage.
+
+Build:
+
+```sh
+source ./setup.sh
+make -C tests/coverage hypervisorTwoStage.elf hypervisorTwoStage.elf.objdump
+```
+
+Run (no lockstep):
+
+```sh
+wsim rv64gch --elf tests/coverage/hypervisorTwoStage.elf
+```
+
+The testbench prints `tohost write: value = 0x1` on success. Add
+`--define "+define+TRACEPC"` to print every retired instruction and trap.
+
+</details>
