@@ -22,6 +22,12 @@
 //            G. G-stage fault on instruction fetch: expect instruction
 //               guest-page fault (20) with mtval2 = GPA >> 2
 //            H. G-stage fault on a store: expect store guest-page fault (23)
+//            I. HLV.D/HSV.D issued from M-mode (V=0) translate through the same
+//               vsatp/hgatp tables with hstatus.SPVP privilege: a supervisor
+//               (SPVP=1) HLV reads what scenario D stored, HSV stores through
+//               two-stage translation, an HLV of an unmapped GPA is a load
+//               guest-page fault, and an HLV with SPVP=0 (VU privilege) of a
+//               supervisor page is an ordinary load page fault (13)
 //
 //          On failure the test writes tohost = (code << 1) | 1, where code
 //          identifies the scenario (see FAIL_* below), so a failing run can be
@@ -72,6 +78,18 @@
 .equ FAIL_F,            6
 .equ FAIL_G,            7
 .equ FAIL_H,            8
+.equ FAIL_I,            9
+
+.equ CSR_HSTATUS,       0x600
+.equ HSTATUS_SPVP,      0x0000000000000100
+
+# HLV.D rd, (rs1) and HSV.D rs2, (rs1): SYSTEM encodings, register numbers as operands
+.macro HLV_D rd, rs1
+    .word 0x6C004073 | (\rd << 7) | (\rs1 << 15)
+.endm
+.macro HSV_D rs1, rs2
+    .word 0x6E004073 | (\rs1 << 15) | (\rs2 << 20)
+.endm
 
 # Guest virtual / guest physical bases used by the scenarios (gigapage-aligned)
 .equ GVA_A,             0x140000000         # VS index 5
@@ -269,6 +287,53 @@ after_h:
     EXPECT_EQ s4, CAUSE_STORE_GPF, FAIL_H
     EXPECT_EQ s6, GVA_E + 0x200, FAIL_H
     EXPECT_EQ s7, (GPA_E + 0x200) >> 2, FAIL_H
+
+    #############################################################
+    # Scenario I: HLV.D/HSV.D from M-mode (V=0) through the scenario C tables.
+    # hstatus.SPVP=1 gives the accesses VS (supervisor) privilege, which the
+    # U=0 VS-stage PTEs require.
+    #############################################################
+    li   t0, HSTATUS_SPVP
+    csrs CSR_HSTATUS, t0
+    li   t1, GVA_C
+    la   t2, store_c
+    li   t3, GIGAOFF_MASK
+    and  t2, t2, t3
+    add  t1, t1, t2            # t1 = GVA of store_c under the scenario C tables
+    HLV_D 11, 6                # a1 = HLV.D (t1): value stored by scenario D
+    EXPECT_EQ a1, 0x0123456789ABCDEF, FAIL_I
+    li   t0, 0xFEDCBA9876543210
+    HSV_D 6, 5                 # HSV.D t0, (t1)
+    la   t2, store_c
+    ld   t2, 0(t2)             # verify with an ordinary M-mode physical load
+    EXPECT_EQ t2, 0xFEDCBA9876543210, FAIL_I
+
+    # HLV.D of a GPA with no G-stage mapping: load guest-page fault, mtval = GVA, mtval2 = GPA >> 2
+    la   t0, after_i_gpf
+    la   t2, current_continue_pc
+    sd   t0, 0(t2)
+    li   t1, GVA_E + 0x300
+    HLV_D 11, 6
+after_i_gpf:
+    EXPECT_EQ s4, CAUSE_LOAD_GPF, FAIL_I
+    EXPECT_EQ s6, GVA_E + 0x300, FAIL_I
+    EXPECT_EQ s7, (GPA_E + 0x300) >> 2, FAIL_I
+
+    # HLV.D with SPVP=0 (VU privilege) of the supervisor (U=0) page: load page fault
+    li   t0, HSTATUS_SPVP
+    csrc CSR_HSTATUS, t0
+    la   t0, after_i_pf
+    la   t2, current_continue_pc
+    sd   t0, 0(t2)
+    li   t1, GVA_C
+    la   t2, store_c
+    li   t3, GIGAOFF_MASK
+    and  t2, t2, t3
+    add  t1, t1, t2
+    HLV_D 11, 6
+after_i_pf:
+    EXPECT_EQ s4, CAUSE_LOAD_PF, FAIL_I
+    EXPECT_EQ s7, 0, FAIL_I
 
     csrw CSR_MTVEC, s1
     csrw CSR_VSATP, zero

@@ -115,7 +115,6 @@ module csr import cvw::*;  #(parameter cvw_t P) (
   output logic                     IllegalCSRAccessM,         // Illegal CSR access: CSR doesn't exist or is inaccessible at this privilege level
   output logic                     VirtualCSRAccessM,         // CSR access that raises a virtual-instruction exception
   output logic                     VirtualCMOInstrM,          // CBO instruction that raises a virtual-instruction exception
-  output logic                     HLVHSVBareM,               // VS-stage and G-stage translation are both Bare for HLV/HSV
   output logic                     BigEndianM                 // memory access is big-endian based on privilege mode and STATUS register endian fields
 );
 
@@ -432,16 +431,6 @@ module csr import cvw::*;  #(parameter cvw_t P) (
       else                                                                             NextHtvalM = '0;
   end else begin: nohtval
     assign NextHtvalM = '0;
-  end
-
-  if (P.H_SUPPORTED & P.VIRTMEM_SUPPORTED) begin: hlsv_bare
-    if (P.XLEN == 64) begin: hlsv_bare64
-      assign HLVHSVBareM = (VSATP_REGW[63:60] == 4'h0) & (HGATP_REGW[63:60] == 4'h0);
-    end else begin: hlsv_bare32
-      assign HLVHSVBareM = ~VSATP_REGW[31] & ~HGATP_REGW[31];
-    end
-  end else begin: hlsv_novirtmem
-    assign HLVHSVBareM = 1'b1;
   end
 
   // Effective status bits for VS-mode. MXR and SUM are exported at both the HS

@@ -148,10 +148,9 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
     // --- Hypervisor ---
   logic                     HSTATUS_SPV;     // from CSR (prev V for SRET in HS)
   logic                     HSTATUS_VTSR, HSTATUS_VTW, HSTATUS_VTVM, HSTATUS_HU;
-  logic                     HLVHSVBareM;     // VSATP/HGATP both Bare for initial HLV/HSV path
   logic                     VSSTATUS_SPP, VSSTATUS_SIE;
   logic                     TrapToM, TrapToHSM, TrapToVSM; // trap target one-hots
-  assign HLVHSVLegalM = P.H_SUPPORTED & HLVHSVInstrM & ~VirtModeW & HLVHSVBareM &
+  assign HLVHSVLegalM = P.H_SUPPORTED & HLVHSVInstrM & ~VirtModeW &
                         ((PrivilegeModeW != P.U_MODE) | HSTATUS_HU);
 
   // track the current privilege level
@@ -163,7 +162,7 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
   logic VirtualInstrFaultM;
   privdec #(P) pmd(.clk, .reset, .StallW, .FlushW, .InstrM(InstrM[31:7]),
     .PrivilegedM, .IllegalIEUFPUInstrM, .IllegalCSRAccessM, .VirtualCSRAccessM, .VirtualCMOInstrM, .HLVHSVInstrM,
-    .HLVHSVBareM, .PrivilegeModeW, .VirtModeW, .STATUS_TSR, .STATUS_TVM, .STATUS_TW,
+    .PrivilegeModeW, .VirtModeW, .STATUS_TSR, .STATUS_TVM, .STATUS_TW,
     .HSTATUS_VTSR, .HSTATUS_VTVM, .HSTATUS_VTW, .HSTATUS_HU, .IllegalInstrFaultM, .VirtualInstrFaultM,
     .EcallFaultM, .BreakpointFaultM, .sretM, .mretM, .RetM, .wfiM, .wfiW, .sfencevmaM);
 
@@ -185,7 +184,7 @@ module privileged import cvw::*;  #(parameter cvw_t P) (
     .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .PMPCFG_ARRAY_REGW, .PMPADDR_ARRAY_REGW,
     .SetFflagsM, .FRM_REGW, .ENVCFG_CBE, .ENVCFG_PBMTE, .ENVCFG_ADUE, .VSENVCFG_PBMTE, .VSENVCFG_ADUE,
     .EPCM, .TrapVectorM,
-    .CSRReadValW, .IllegalCSRAccessM, .VirtualCSRAccessM, .VirtualCMOInstrM, .HLVHSVBareM, .BigEndianM);
+    .CSRReadValW, .IllegalCSRAccessM, .VirtualCSRAccessM, .VirtualCMOInstrM, .BigEndianM);
 
   // pipeline early-arriving trap sources
   privpiperegs #(.XLEN(P.XLEN), .H_SUPPORTED(P.H_SUPPORTED)) ppr(.clk, .reset, .StallD, .StallE, .StallM, .FlushD, .FlushE, .FlushM,

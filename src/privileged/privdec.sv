@@ -38,7 +38,6 @@ module privdec import cvw::*;  #(parameter cvw_t P) (
   input  logic         VirtualCSRAccessM,                   // CSR access that should trap as virtual instruction
   input  logic         VirtualCMOInstrM,                    // CBO instruction that should trap as virtual instruction
   input  logic         HLVHSVInstrM,                        // Valid HLV/HLVX/HSV system-instruction encoding
-  input  logic         HLVHSVBareM,                         // VS-stage and G-stage translation are both Bare for HLV/HSV
   input  logic [1:0]   PrivilegeModeW,                      // current privilege level
   input  logic         VirtModeW,                           // current V
   input  logic         STATUS_TSR, STATUS_TVM, STATUS_TW,   // status bits (HS)
@@ -166,10 +165,9 @@ module privdec import cvw::*;  #(parameter cvw_t P) (
     assign HVFenceFault = PrivilegedM & VirtModeW & (hvvmaM | hgvmaM);
     assign HLVHSVFault = HLVHSVInstrM & VirtModeW; // norm:hlsv_virtinst: V=1 -> virtual instruction
     // norm:hlsv_mode/norm:hlsv_illegalinst: HLV/HLVX/HSV are valid in M/HS
-    // and in U only when hstatus.HU=1. norm:hlsv_trans requires two-stage
-    // translation; until that is integrated, only Bare/Bare execution is legal.
-    assign HLVHSVIllegalM = HLVHSVInstrM & ~VirtModeW &
-                            (((PrivilegeModeW == P.U_MODE) & ~HSTATUS_HU) | ~HLVHSVBareM);
+    // and in U only when hstatus.HU=1. Their two-stage translation through
+    // vsatp/hgatp (norm:hlsv_trans) is performed by the MMU and page table walker.
+    assign HLVHSVIllegalM = HLVHSVInstrM & ~VirtModeW & (PrivilegeModeW == P.U_MODE) & ~HSTATUS_HU;
     assign WFIShouldTrapVirtM = wfiM & WFITimeoutM & ~STATUS_TW;
     assign VUWfiFault = WFIShouldTrapVirtM & VirtModeW & (PrivilegeModeW == P.U_MODE);
     assign VSWfiFault = WFIShouldTrapVirtM & VirtModeW & (PrivilegeModeW == P.S_MODE) & HSTATUS_VTW;
