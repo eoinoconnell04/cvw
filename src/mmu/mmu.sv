@@ -31,6 +31,8 @@ module mmu import cvw::*;  #(parameter cvw_t P,
                              parameter TLB_ENTRIES = 8, IMMU = 0) (
   input  logic                 clk, reset,
   input  logic [P.XLEN-1:0]    SATP_REGW,          // Current value of satp CSR (from privileged unit)
+  input  logic [P.XLEN-1:0]    VSATP_REGW,         // Current value of vsatp CSR (from privileged unit)
+  input  logic [P.XLEN-1:0]    HGATP_REGW,
   input  logic                 STATUS_MXR,         // Status CSR: make executable page readable
   input  logic                 STATUS_SUM,         // Status CSR: Supervisor access to user memory
   input  logic                 STATUS_MPRV,        // Status CSR: modify machine privilege

@@ -91,6 +91,8 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
   logic                          HLVHSVInstrM;                    // Valid HLV/HLVX/HSV encoding in Memory stage
   logic                          HLVHSVLegalM;                    // HLV/HLVX/HSV may issue its LSU access
   logic                          HSTATUS_SPVP;                    // HLV/HLVX/HSV effective privilege
+  logic                          VirtModeW;                       // current virtualization mode V
+  logic                          MSTATUS_MPV;                     // mstatus.MPV
 
   // floating point unit signals
   logic [2:0]                    FRM_REGW;
@@ -111,6 +113,7 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
   logic                          ITLBWriteF;
   logic                          ITLBMissOrUpdateAF;
   logic [P.XLEN-1:0]             SATP_REGW;
+  logic [P.XLEN-1:0]             VSATP_REGW, HGATP_REGW;          // VS-stage and G-stage address translation CSRs
   logic                          STATUS_MXR, STATUS_SUM, STATUS_MPRV;
   logic [1:0]                    STATUS_MPP, STATUS_FS;
   logic [1:0]                    PrivilegeModeW;
@@ -193,7 +196,7 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
     // Faults out
     .IllegalBaseInstrD, .IllegalFPUInstrD, .InstrPageFaultF, .IllegalIEUFPUInstrD, .InstrMisalignedFaultM,
     // mmu management
-    .PrivilegeModeW, .PTE, .PageType, .SATP_REGW, .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV,
+    .PrivilegeModeW, .PTE, .PageType, .SATP_REGW, .VSATP_REGW, .HGATP_REGW, .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV,
     .STATUS_MPP, .ENVCFG_PBMTE, .ENVCFG_ADUE, .ITLBWriteF, .sfencevmaM, .ITLBMissOrUpdateAF,
     // pmp/pma (inside mmu) signals.
     .PMPCFG_ARRAY_REGW,  .PMPADDR_ARRAY_REGW, .InstrAccessFaultF);
@@ -239,11 +242,15 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
     .PMPADDR_ARRAY_REGW,          // connects to csr
     // hptw keep i/o
     .SATP_REGW,                   // from csr
+    .VSATP_REGW,                  // from csr
+    .HGATP_REGW,                  // from csr
     .STATUS_MXR,                  // from csr
     .STATUS_SUM,                  // from csr
     .STATUS_MPRV,                 // from csr
     .STATUS_MPP,                  // from csr
     .HSTATUS_SPVP,                // from csr
+    .VirtModeW,                   // from privileged
+    .MSTATUS_MPV,                 // from csr
     .ENVCFG_PBMTE,                // from csr
     .ENVCFG_ADUE,                 // from csr
     .sfencevmaM,                  // connects to privilege
@@ -308,18 +315,18 @@ module wallypipelinedcore import cvw::*; #(parameter cvw_t P) (
       .MTimerInt, .MExtInt, .SExtInt, .MSwInt,
       .MTIME_CLINT, .HGEIPIn, .IEUAdrxTvalM, .SetFflagsM,
       .InstrAccessFaultF, .HPTWInstrAccessFaultF, .HPTWInstrPageFaultF, .LoadAccessFaultM, .StoreAmoAccessFaultM, .SelHPTW,
-      .PrivilegeModeW, .SATP_REGW,
+      .PrivilegeModeW, .SATP_REGW, .VSATP_REGW, .HGATP_REGW,
       .STATUS_MXR, .STATUS_SUM, .STATUS_MPRV, .STATUS_MPP, .STATUS_FS,
-      .HSTATUS_SPVP, .HLVHSVLegalM,
+      .HSTATUS_SPVP, .VirtModeW, .MSTATUS_MPV, .HLVHSVLegalM,
       .PMPCFG_ARRAY_REGW, .PMPADDR_ARRAY_REGW,
       .FRM_REGW, .ENVCFG_CBE, .ENVCFG_PBMTE, .ENVCFG_ADUE, .wfiM, .IntPendingM, .BigEndianM);
   end else begin
     assign {CSRReadValW, PrivilegeModeW,
-            SATP_REGW, STATUS_MXR, STATUS_SUM, STATUS_MPRV, STATUS_MPP, STATUS_FS, FRM_REGW,
+            SATP_REGW, VSATP_REGW, HGATP_REGW, STATUS_MXR, STATUS_SUM, STATUS_MPRV, STATUS_MPP, STATUS_FS, FRM_REGW,
             // PMPCFG_ARRAY_REGW, PMPADDR_ARRAY_REGW,
             ENVCFG_CBE, ENVCFG_PBMTE, ENVCFG_ADUE,
             EPCM, TrapVectorM, RetM, TrapM,
-            sfencevmaM, HSTATUS_SPVP, HLVHSVLegalM, BigEndianM, wfiM, IntPendingM} = '0;
+            sfencevmaM, HSTATUS_SPVP, VirtModeW, MSTATUS_MPV, HLVHSVLegalM, BigEndianM, wfiM, IntPendingM} = '0;
   end
 
   // multiply/divide unit
